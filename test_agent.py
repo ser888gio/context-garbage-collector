@@ -96,3 +96,9 @@ def test_run_row_records_hints_setting():
     row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, FakeAgent(), max_turns=200, hints=True)
 
     assert row["hints"] is True
+
+
+def test_oracle_answers_with_zero_recalls_under_a_small_budget():
+    row = run("oracle", budget=4000)
+
+    assert (row["end"], row["success"], row["recalls"]) == ("answered", True, 0)
