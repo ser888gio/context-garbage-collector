@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CGC runs</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--line:#ddd;--hi:#f4f4f4}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#e8e8e8;--mut:#999;--line:#333;--hi:#222}}
+body{background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;margin:0 auto;max-width:1100px;padding:16px}
+h1{font-size:20px}h2{font-size:15px;margin-top:28px}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left}
+th{background:var(--hi)}td.n{text-align:right;font-variant-numeric:tabular-nums}
+#sum,#upd{color:var(--mut)}
+.ok{color:#2a8a4a}.bad{color:#c0392b}
+.wrap{overflow-x:auto}
+</style></head><body>
+<h1>Context GC runs</h1>
+<p id="sum">loading...</p>
+<h2>By model, strategy, hints</h2>
+<div class="wrap"><table id="agg"></table></div>
+<h2>Last 15 runs</h2>
+<div class="wrap"><table id="last"></table></div>
+<p id="upd"></p>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+const table = (head, rows) => "<tr>" + head.map(h => `<th>${h}</th>`).join("") + "</tr>" +
+  rows.map(r => "<tr>" + r.map(c => `<td class="${typeof c == "number" ? "n" : ""}">${c}</td>`).join("") + "</tr>").join("");
+
+function render(rows) {
+  $("sum").textContent = `${rows.length} runs, $${rows.reduce((s, r) => s + (r.cost_usd || 0), 0).toFixed(4)} total cost`;
+  const g = {};
+  for (const r of rows) (g[[r.model, r.strategy, !!r.hints]] ||= []).push(r);
+  const agg = Object.entries(g).sort().map(([k, v]) => {
+    const [m, s, h] = k.split(",");
+    return [esc(m), esc(s), h, v.length, Math.round(100 * v.filter(r => r.success).length / v.length) + "%",
+            v.filter(r => r.end == "oom").length, Math.round(mean(v.map(r => r.input_tokens || 0)))];
+  });
+  $("agg").innerHTML = table(["model", "strategy", "hints", "runs", "success", "oom", "mean input tokens"], agg);
+  const last = rows.slice(-15).reverse().map(r => [esc(r.ts), esc(r.model), esc(r.strategy), !!r.hints, esc(r.task_id),
+    `<span class="${r.success ? "ok" : "bad"}">${r.success ? "success" : "fail"}</span> (${esc(r.end)})`, r.input_tokens, r.cost_usd]);
+  $("last").innerHTML = table(["ts", "model", "strategy", "hints", "task", "outcome", "input tokens", "cost $"], last);
+}
+
+async function tick() {
+  try {
+    const text = await (await fetch("/results/runs.jsonl", {cache: "no-store"})).text();
+    render(text.split("\n").filter(l => l.trim()).map(l => JSON.parse(l)));
+    $("upd").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) { $("upd").textContent = "fetch failed: " + e.message; }
+}
+tick();
+setInterval(tick, 10000);
+</script></body></html>
