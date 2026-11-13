@@ -4,3 +4,5 @@ __pycache__/
 results/traces/
 results/
 .claude/
+.pytest_cache/
+.hypothesis/
