@@ -16,8 +16,7 @@ Status: early-stage experiment; results in JOURNAL.md.
 | `refcount` | Stub objects with no incoming references from live objects. |
 | `mark_sweep` | Stub objects unreachable from the roots. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
-
-An `oracle` strategy (it knows the answer, so it is an upper bound) is on an open branch.
+| `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
 
 ## Quickstart
 
@@ -44,7 +43,7 @@ python report.py
 
 The sweep is resumable: finished cells are skipped. Run `python agent.py --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
-Two scripts are on open branches and will land soon:
+Inspect runs:
 - `timeline.py`: heap timeline plot for one run, `python timeline.py results/traces/<run_id>.json`.
 - `audit.py`: checks whether the collector dropped the needle, `python audit.py`.
 
