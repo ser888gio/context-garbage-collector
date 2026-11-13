@@ -13,10 +13,14 @@ def table(path):
     df = pd.read_json(path, lines=True)
     df["cached_share"] = df.cached_input_tokens / df.input_tokens
     df["oom"] = df.end == "oom"
+    oracle = df[df.strategy == "oracle"].assign(ppt=lambda d: d.input_tokens / d.turns)
+    ref = oracle.groupby(["model", "task_id", "hints"]).ppt.mean().rename("oracle_ppt")
+    df = df.join(ref, on=["model", "task_id", "hints"])
+    df["excess_tokens"] = df.input_tokens / df.turns - df.oracle_ppt
     return df.groupby(KEYS).agg(
         runs=("success", "size"), success_rate=("success", "mean"), oom=("oom", "sum"),
         input_tokens=("input_tokens", "mean"), cached_share=("cached_share", "mean"),
-        recalls=("recalls", "mean"), max_est_tokens=("max_est_tokens", "mean"),
+        recalls=("recalls", "mean"), excess_tokens=("excess_tokens", "mean"), max_est_tokens=("max_est_tokens", "mean"),
     ).reset_index()
 
 

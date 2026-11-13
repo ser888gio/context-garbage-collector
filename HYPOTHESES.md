@@ -16,6 +16,8 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H8 | Simple LRU masking is as good as the smarter collectors (as in "The Complexity Trap"). | lru_mask vs mark_sweep/generational: success and tokens. | open |
 | H9 | GC can make the agent thrash: recall, re-collect, recall again. | repeated recalls of the same id in traces. | open |
 | H10 | The oracle sets the upper bound; real collectors reach X% of its success at Y% of its tokens. | `oracle` vs each strategy: success and input_tokens; `audit.py` for what each lost. | open |
+| H15 | The production baseline (mask + summary) is as good as any GC strategy. | `hybrid` and `mask` vs every other strategy: success, tokens, cost incl. `summary_calls`. | open |
+| H16 | Mark-sweep leaks fewer tokens than refcount (excess over oracle). | `excess_tokens` per strategy: mark_sweep vs refcount. | open |
 
 ## Roadmap
 

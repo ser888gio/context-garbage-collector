@@ -18,6 +18,8 @@ class Obj:
     touched: int = 0
     last_used: int = 0
     survived: int = 0
+    # Without this, the summary message (still live and collectable) would be re-summarized every GC run.
+    summarized: bool = False
 
     @property
     def live(self):
@@ -136,6 +138,29 @@ def lru_mask(heap, st):
     return [o.id for o in out]
 
 
+def mask(heap, st):
+    t = now(heap)
+    out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.turn >= st.get("mask_turns", 3)]
+    for o in out:
+        kill(o, st.get("hints", False))
+    return [o.id for o in out]
+
+
+def hybrid(heap, st):
+    out = mask(heap, st)
+    if "summarize" not in st or size(heap) <= st["budget"] * st.get("threshold", 0.7):
+        return out
+    old = [o for o in collectable(heap) if not o.summarized]
+    if not old:
+        return out
+    summary = st["summarize"]([f"{o.msg['role']}: {text(o)}" for o in old])
+    for o in old[1:]:
+        kill(o, st.get("hints", False))
+    old[0].msg["content"] = f"[summary of msgs {old[0].id}-{old[-1].id}] {summary}"
+    old[0].summarized = True
+    return out + [o.id for o in old[1:]]
+
+
 def refcount(heap, st):
     t = now(heap)
     out = []
@@ -189,4 +214,4 @@ def oracle(heap, st):
     return [o.id for o in out]
 
 
-STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, generational, oracle)}
+STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, refcount, mark_sweep, generational, oracle)}
