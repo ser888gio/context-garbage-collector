@@ -93,8 +93,8 @@ Inspect runs:
 
 One row per run in `results/runs.jsonl`:
 - identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `budget`, `task_family`, `task_id`, `provider`, `model`
-- outcome: `success`, `end`, `answer`, `turns`
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `repeated_calls`
+- outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
 - size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
 - cache behavior: `stable_prefix_share`, `cache_breaks`
 

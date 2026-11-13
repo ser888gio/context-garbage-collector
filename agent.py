@@ -102,11 +102,13 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, repeated_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
     if strategy == "oracle":
         st["oracle_keys"] = {task["answer"]}
     prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
+    error = ""
+    known = {t["function"]["name"] for t in TOOLS}
 
     turn = 0
     for turn in range(1, max_turns + 1):
@@ -126,7 +128,13 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
         cache_breaks += n < len(prev)
         prev = copy.deepcopy(msgs)  # collectors mutate messages in place
-        resp = complete(msgs, TOOLS)
+        try:
+            resp = complete(msgs, TOOLS)
+        except RateLimited:
+            raise
+        except Exception as e:
+            error, end = f"{type(e).__name__}: {e}"[:300], "api_error"
+            break
         u = resp.usage
         s["input_tokens"] += u.prompt_tokens
         s["output_tokens"] += u.completion_tokens
@@ -157,6 +165,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             except json.JSONDecodeError:
                 args = {}
             sig = c.function.name + json.dumps(args, sort_keys=True)
+            if c.function.name not in known:
+                s["unknown_tool_calls"] += 1
             if c.function.name == "recall":
                 s["recalls"] += 1
             elif sig in seen_calls:
@@ -168,7 +178,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
            "trigger": trigger, "hints": hints, "budget": budget, "task_family": task["family"], "task_id": task["id"],
-           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end,
+           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,

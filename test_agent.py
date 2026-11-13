@@ -126,3 +126,66 @@ def test_mark_sweep_run_breaks_the_cache_and_lowers_prefix_share():
     row = run("mark_sweep", budget=4000)
 
     assert (row["cache_breaks"], row["stable_prefix_share"]) == (11, 0.373)
+
+
+class ProviderRejected(Exception):
+    pass
+
+
+class FailsOnCall(FakeAgent):
+    def __init__(self, n):
+        super().__init__()
+        self.limit, self.calls_made = n, 0
+
+    def __call__(self, messages, tools):
+        self.calls_made += 1
+        if self.calls_made == self.limit:
+            raise ProviderRejected("Tool call validation failed: tool_use_failed " + "x" * 400)
+        return super().__call__(messages, tools)
+
+
+class CallsMissingToolOnce(FakeAgent):
+    def __init__(self):
+        super().__init__()
+        self.tried = False
+
+    def __call__(self, messages, tools):
+        if not self.tried:
+            self.tried = True
+            return self.reply(calls=self.call("search", q="x"), messages=messages)
+        return super().__call__(messages, tools)
+
+
+def run_with(complete):
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    return agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, complete, max_turns=200)[0]
+
+
+def test_api_error_ends_only_that_run_and_records_the_error():
+    row = run_with(FailsOnCall(3))
+
+    assert (row["end"], row["success"], row["turns"]) == ("api_error", False, 3)
+    assert row["error"] == "ProviderRejected: Tool call validation failed: tool_use_failed " + "x" * 237
+
+
+def test_rate_limit_still_propagates_out_of_run():
+    def limited(messages, tools):
+        raise agent.RateLimited("fake/model")
+
+    try:
+        run_with(limited)
+    except agent.RateLimited:
+        return
+    raise AssertionError("RateLimited was swallowed")
+
+
+def test_normal_run_has_empty_error_and_no_unknown_tool_calls():
+    row = run_with(FakeAgent())
+
+    assert (row["error"], row["unknown_tool_calls"]) == ("", 0)
+
+
+def test_call_to_a_tool_not_in_the_request_is_counted_and_the_run_continues():
+    row = run_with(CallsMissingToolOnce())
+
+    assert (row["unknown_tool_calls"], row["end"], row["success"]) == (1, "answered", True)
