@@ -361,3 +361,33 @@ def answer_poison(answer):
 @pytest.mark.parametrize("answer,success", [("1791", True), ("7468", False), ("changed from 7468 to 1791", False)])
 def test_poison_scoring_requires_the_new_code_and_rejects_the_revoked_one(answer, success):
     assert answer_poison(answer) is success
+
+
+def run_row(strategy, trigger, hints=False, upfront=False):
+    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=upfront)
+    return agent.run(task, "fake/model", strategy, trigger, 4000, FakeAgent(), max_turns=200, hints=hints)[0]
+
+
+def test_preview_stub_run_records_the_mode_and_still_succeeds():
+    row = run_row("mark_sweep", "threshold:0.7", hints="preview")
+
+    assert (row["hints"], row["success"], row["cache_breaks"]) == ("preview", True, 10)
+
+
+def test_numbers_stub_run_records_the_mode_and_still_succeeds():
+    row = run_row("mark_sweep", "threshold:0.7", hints="numbers")
+
+    assert (row["hints"], row["success"], row["cache_breaks"]) == ("numbers", True, 10)
+
+
+def test_hysteresis_run_collects_the_reachable_needle_that_plain_threshold_keeps():
+    plain = run_row("mark_sweep", "threshold:0.7", hints=True, upfront=True)
+    low = run_row("mark_sweep", "threshold:0.7:0.4", hints=True, upfront=True)
+
+    assert [(r["success"], r["cache_breaks"], r["recalls"]) for r in (plain, low)] == [(True, 5, 0), (True, 10, 6)]
+
+
+def test_h2o_run_succeeds_by_recalling_what_it_collected():
+    row = run_row("h2o", "threshold:0.7")
+
+    assert (row["success"], row["cache_breaks"], row["recalls"]) == (True, 13, 6)

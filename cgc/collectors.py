@@ -70,13 +70,27 @@ def collectable(heap):
     t = now(heap)
     return [o for o in heap if o.live and not protected(o, t)]
 
+NUM_RE = re.compile(r"\b\d{4,}\b")
+MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
+         "preview": "preview", "numbers": "numbers"}
+
+
+def stub_mode(hints):
+    return MODES[hints]
+
 
 def kill(o, hints=False):
+    mode = stub_mode(hints)
     o.dead = True
     content = o.msg.get("content")
     what = f"msg {o.id} {o.label}".strip()
-    found = sorted(k for k in keys(o) if k not in o.label)[:6] if hints else []
+    found = sorted(k for k in keys(o) if k not in o.label)[:6] if mode != "none" else []
     what += f" — keys: {', '.join(found)}" if found else ""
+    if mode == "numbers" and content:
+        nums = list(dict.fromkeys(NUM_RE.findall(content)))
+        what += f" — numbers: {', '.join(nums)}" if nums else ""
+    if mode == "preview" and content:
+        what += f' — preview: "{" ".join(content.split()[:12])}"'
     stub = f"[collected: {what}; call recall({o.id}) to restore]"
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
@@ -189,7 +203,6 @@ def mark_sweep(heap, st):
 
 
 CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b")
-NUM_RE = re.compile(r"\b\d{4,}\b")
 
 
 def facts(o):
@@ -231,6 +244,22 @@ def generational(heap, st):
     return out
 
 
+def h2o(heap, st):
+    t = now(heap)
+    live = [o for o in heap if o.live and not o.root]
+    pinned = {o.id for o in live[:st.get("h2o_sink", 2)]} | {o.id for o in live if o.turn > t - st.get("h2o_recent", 2)}
+    pool = [o for o in collectable(heap) if o.id not in pinned]
+    k = {o.id: keys(o) for o in heap if o.live}
+    refs = {o.id: sum(r.id != o.id and r.is_referencer and bool(k[r.id] & k[o.id]) for r in heap if r.live) for o in pool}
+    # Zero-reference results are never "heavy"; without this the top-M slots would keep arbitrary garbage.
+    heavy = sorted((o for o in pool if o.msg["role"] == "tool" and refs[o.id]), key=lambda o: (-refs[o.id], o.id))
+    keep = {o.id for o in heavy[:st.get("h2o_heavy", 4)]}
+    out = [o for o in pool if o.id not in keep]
+    for o in out:
+        kill(o, st.get("hints", False))
+    return [o.id for o in out]
+
+
 def forget(heap, ids, hints=False):
     t = now(heap)
     by_id = {o.id: o for o in heap}
@@ -253,6 +282,24 @@ def oracle(heap, st):
     return [o.id for o in out]
 
 
+def with_target(fn):
+    # Hysteresis for reachability collectors: after the normal pass, also collect the oldest
+    # reachable-but-not-protected tool results until size <= target * budget.
+    def wrapped(heap, st):
+        out = fn(heap, st)
+        for o in collectable(heap):
+            if "target" not in st or size(heap) <= st["budget"] * st["target"]:
+                break
+            if o.msg["role"] == "tool":
+                kill(o, st.get("hints", False))
+                out.append(o.id)
+        return out
+    wrapped.__name__ = fn.__name__
+    return wrapped
+
+
 STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, refcount, mark_sweep, write_barrier,
-                                             generational, oracle)}
+                                             generational, h2o, oracle)}
+for _n in ("refcount", "mark_sweep", "write_barrier", "generational"):
+    STRATEGIES[_n] = with_target(STRATEGIES[_n])
 STRATEGIES["manual"] = none

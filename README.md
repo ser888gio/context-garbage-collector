@@ -61,6 +61,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 | `mark_sweep` | Stub objects unreachable from the roots. |
 | `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
+| `h2o` | Heavy-hitter retention (from H2O): pin the first 2 messages (sinks) and the newest 2 turns, keep the 4 tool results most referenced by other messages, collect the rest. Tunable with `h2o_sink`, `h2o_recent`, `h2o_heavy`. |
 | `manual` | Collects nothing automatically. The model gets a `forget(ids)` tool (tool results show `[msg N]`), always sees the memory-pressure note, and runs out of memory if it never forgets. |
 | `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
 
@@ -88,6 +89,8 @@ python -m analysis.report
 ```
 
 `--family needle,multihop,poison` picks the task family (default `needle`).
+
+`--hints` sets what a collected stub carries: `false`/`none` (nothing), `true`/`keys` (keys of the collected message), `preview` (keys + first 12 words), `numbers` (keys + every 4+ digit number). `--triggers threshold:P:T` collects when context exceeds P of the budget and then down to T of it (hysteresis, e.g. `threshold:0.7:0.4`); `threshold:P` is unchanged. For `mark_sweep`, `refcount`, `generational` and `write_barrier`, hysteresis also collects the oldest reachable tool results until the target is met.
 
 The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 

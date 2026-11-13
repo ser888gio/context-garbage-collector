@@ -311,3 +311,79 @@ def test_write_barrier_keeps_facts_about_different_keys():
     C.write_barrier(heap, {"budget": 100})
 
     assert [heap[3].dead, heap[5].dead] == [False, False]
+
+
+def note():
+    return result(12, "notes/12.txt", "ORION code is 4821 and the spare is 90210. " + "plain filler words " * 10, 1)
+
+
+@pytest.mark.parametrize("hints,stub", [
+    ("none", "[collected: msg 12 read_file notes/12.txt; call recall(12) to restore]"),
+    ("keys", "[collected: msg 12 read_file notes/12.txt — keys: 4821, 90210, ORION; call recall(12) to restore]"),
+    ("preview", '[collected: msg 12 read_file notes/12.txt — keys: 4821, 90210, ORION — preview: "ORION code is 4821 and the spare is 90210. plain filler words"; call recall(12) to restore]'),
+    ("numbers", "[collected: msg 12 read_file notes/12.txt — keys: 4821, 90210, ORION — numbers: 4821, 90210; call recall(12) to restore]"),
+])
+def test_stub_mode_decides_what_the_stub_carries(hints, stub):
+    o = note()
+
+    C.kill(o, hints=hints)
+
+    assert o.msg["content"] == stub
+
+
+def test_false_and_true_still_mean_none_and_keys():
+    a, b = note(), note()
+
+    C.kill(a, hints=False)
+    C.kill(b, hints=True)
+
+    assert (a.msg["content"], b.msg["content"]) == (
+        "[collected: msg 12 read_file notes/12.txt; call recall(12) to restore]",
+        "[collected: msg 12 read_file notes/12.txt — keys: 4821, 90210, ORION; call recall(12) to restore]")
+
+
+def test_preview_stub_is_skipped_when_it_would_not_be_shorter():
+    o = result(12, "notes/12.txt", "ORION is 4821", 1)
+
+    C.kill(o, hints="preview")
+
+    assert (o.msg["content"], o.saved) == ("ORION is 4821", None)
+
+
+def fat_heap():
+    h = [sys_msg(), user(1, "Find the ORION code in a.txt b.txt c.txt d.txt e.txt")]
+    for i, p in zip(range(2, 11, 2), "abcde"):
+        h += [reads(i, p + ".txt", i // 2), result(i + 1, p + ".txt", "word " * 200, i // 2)]
+    return h + [reads(12, "f.txt", 6), result(13, "f.txt", "latest", 6)]
+
+
+def test_hysteresis_collects_more_than_plain_threshold_on_the_same_heap():
+    plain, low = fat_heap(), fat_heap()
+
+    a = C.STRATEGIES["mark_sweep"](plain, {"budget": 1500})
+    b = C.STRATEGIES["mark_sweep"](low, {"budget": 1500, "target": 0.4})
+
+    assert (a, b) == ([], [3, 5, 7, 9, 11])
+
+
+def test_hysteresis_stops_as_soon_as_size_is_at_or_below_target():
+    heap = fat_heap()
+
+    out = C.STRATEGIES["refcount"](heap, {"budget": 1500, "target": 0.7})
+
+    assert (out, C.size(heap) <= 1050) == ([3, 5, 7], True)
+
+
+def test_h2o_keeps_sinks_recent_turns_and_the_most_referenced_result():
+    heap = [sys_msg(), user(1, "Read the notes."),
+            reads(2, "a.txt", 1), result(3, "a.txt", "alpha " * 50, 1),
+            reads(4, "b.txt", 2), result(5, "b.txt", "bravo " * 50, 2),
+            reads(6, "c.txt", 3), result(7, "c.txt", "charlie " * 50, 3),
+            says(8, "c.txt looks useful", 3), says(9, "back to c.txt", 4),
+            reads(10, "d.txt", 4), result(11, "d.txt", "delta " * 50, 4),
+            reads(12, "e.txt", 5), result(13, "e.txt", "echo " * 50, 5),
+            reads(14, "f.txt", 6), result(15, "f.txt", "foxtrot " * 50, 6)]
+
+    out = C.h2o(heap, {"budget": 100, "h2o_heavy": 1})
+
+    assert out == [4, 5, 6, 8, 9, 10, 11]
