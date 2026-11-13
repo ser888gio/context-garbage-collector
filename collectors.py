@@ -163,6 +163,31 @@ def mark_sweep(heap, st):
     return [o.id for o in out]
 
 
+CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b")
+NUM_RE = re.compile(r"\b\d{4,}\b")
+
+
+def facts(o):
+    # A clause (split on . ; newline) with one CAPS key asserts its LAST 4+ digit number. Splitting on ";"
+    # keeps "ORION is now 7310; the old code 4821 is revoked" as ORION = 7310, not the revoked 4821.
+    out = {}
+    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.msg.get("content") or ""):
+        caps, nums = set(CAPS_RE.findall(sentence)), NUM_RE.findall(sentence)
+        if len(caps) == 1 and nums:
+            out[caps.pop()] = nums[-1]
+    return out
+
+
+def write_barrier(heap, st):
+    live = [o for o in heap if o.live]
+    f = {o.id: facts(o) for o in live}
+    stale = [o for o in collectable(heap)
+             if any(f[p.id].get(k, v) != v for p in live if p.id > o.id for k, v in f[o.id].items())]
+    for o in stale:
+        kill(o, st.get("hints", False))
+    return [o.id for o in stale] + mark_sweep(heap, st)
+
+
 def generational(heap, st):
     k_promote = st.get("promote_after", 2)
     old = [o for o in heap if o.live and o.survived >= k_promote]
@@ -189,4 +214,4 @@ def oracle(heap, st):
     return [o.id for o in out]
 
 
-STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, generational, oracle)}
+STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, write_barrier, generational, oracle)}

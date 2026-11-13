@@ -57,6 +57,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 | `lru_mask` | Stub tool outputs not touched in the last N turns. |
 | `refcount` | Stub objects with no incoming references from live objects. |
 | `mark_sweep` | Stub objects unreachable from the roots. |
+| `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
 | `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
 
@@ -82,6 +83,8 @@ python agent.py --models openrouter/nvidia/nemotron-3.5-lightning:free \
     --strategies none,truncate,mark_sweep --triggers threshold:0.7 --seeds 0,1,2 --max-cost 0
 python report.py
 ```
+
+`--family needle,multihop,poison` picks the task family (default `needle`).
 
 The sweep is resumable: finished cells are skipped. Run `python agent.py --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
