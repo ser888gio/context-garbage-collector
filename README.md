@@ -91,6 +91,16 @@ python -m analysis.report
 
 The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
+## Long runs
+
+`scripts/sweep.ps1` starts a sweep as a hidden, detached process that keeps running after the terminal closes, and prints its PID:
+
+```
+powershell -File scripts/sweep.ps1 -Name sweep3 --models groq/openai/gpt-oss-120b --strategies mark_sweep,refcount --hints true --tag sweep3
+```
+
+Output goes to `results/<Name>.log` and `results/<Name>.err`; stop it with `Stop-Process -Id <PID>`. Watch progress at http://localhost:8000/analysis/dashboard.html after `python -m http.server 8000` from the repo root . `python -m analysis.results` regenerates [docs/RESULTS.md](docs/RESULTS.md).
+
 Inspect runs:
 - `analysis.timeline`: heap timeline plot for one run, `python -m analysis.timeline results/traces/<run_id>.json`.
 - `analysis.audit`: checks whether the collector dropped the needle, `python -m analysis.audit`.
