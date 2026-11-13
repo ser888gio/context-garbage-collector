@@ -32,6 +32,11 @@ TOOLS = [
                                       "parameters": {"type": "object", "properties": {"id": {"type": "integer"}},
                                                      "required": ["id"]}}},
 ]
+FORGET_TOOL = {"type": "function", "function": {
+    "name": "forget", "description": "Free memory: collect old messages by id (tool results show [msg N]). "
+                                     "The system prompt, task and newest turn are refused.",
+    "parameters": {"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "integer"}}},
+                   "required": ["ids"]}}}
 
 
 class RateLimited(Exception):
@@ -92,23 +97,32 @@ def common_prefix(prev, cur):
     return n, chars
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False):
+def pressure_note(heap, budget):
+    used = C.size(heap)
+    return {"role": "user", "content": f"[memory] context {used * 100 // budget}% of budget ({used}/{budget} tokens), "
+                                       f"{sum(o.dead for o in heap)} messages collected."}
+
+
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
         heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, touched=turn, last_used=turn))
+        return heap[-1]
 
     add({"role": "system", "content": SYSTEM}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, forgets=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
     if strategy == "oracle":
         st["oracle_keys"] = {task["answer"]}
     prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
     error = ""
-    known = {t["function"]["name"] for t in TOOLS}
+    manual = strategy == "manual"
+    tools = TOOLS + [FORGET_TOOL] * manual
+    known = {t["function"]["name"] for t in tools}
 
     turn = 0
     for turn in range(1, max_turns + 1):
@@ -129,7 +143,10 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         cache_breaks += n < len(prev)
         prev = copy.deepcopy(msgs)  # collectors mutate messages in place
         try:
-            resp = complete(msgs, TOOLS)
+            # The note is appended after the prefix accounting above and never stored in the heap,
+            # so it can't break the cached prefix or show up in later turns.
+            note = [pressure_note(heap, budget)] if pressure or manual else []
+            resp = complete(msgs + note, tools)
         except RateLimited:
             raise
         except Exception as e:
@@ -172,12 +189,19 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             elif sig in seen_calls:
                 s["repeated_calls"] += 1
             seen_calls.add(sig)
-            result = call_tool(c.function.name, args, task, heap, turn)
+            if manual and c.function.name == "forget":
+                done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
+                s["forgets"] += len(done)
+                result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
+            else:
+                result = call_tool(c.function.name, args, task, heap, turn)
             label = f"{c.function.name} {args.get('path', '')}".strip()
-            add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+            o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+            if manual:
+                o.msg["content"] = f"[msg {o.id}] {result}"
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "hints": hints, "budget": budget, "task_family": task["family"], "task_id": task["id"],
+           "trigger": trigger, "hints": hints, "pressure": pressure, "budget": budget, "task_family": task["family"], "task_id": task["id"],
            "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
@@ -235,6 +259,7 @@ def main():
     p.add_argument("--positions", default="0.5")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
+    p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
     p.add_argument("--max-turns", type=int, default=80)
@@ -243,24 +268,24 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(".env")
-    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  [h == "true" for h in a.hints.split(",")])
-        for upfront, pos, seed, trigger, strategy, hints in cells:
+                                  [h == "true" for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
+        for upfront, pos, seed, trigger, strategy, hints, pressure in cells:
             task = needle_task(seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, hints, a.budget, task["id"]) in done:
+            if (model, strategy, trigger, hints, pressure, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break

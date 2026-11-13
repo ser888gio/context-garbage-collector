@@ -16,6 +16,8 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H8 | Simple LRU masking is as good as the smarter collectors (as in "The Complexity Trap"). | lru_mask vs mark_sweep/generational: success and tokens. | open |
 | H9 | GC can make the agent thrash: recall, re-collect, recall again. | repeated recalls of the same id in traces. | open |
 | H10 | The oracle sets the upper bound; real collectors reach X% of its success at Y% of its tokens. | `oracle` vs each strategy: success and input_tokens; `audit.py` for what each lost. | open |
+| H13 | A model managing its own memory (manual forget) does worse than a 20-line algorithm. | `manual` vs `mark_sweep`/`lru_mask`: success, oom rate, `forgets`. | open |
+| H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | open |
 
 ## Roadmap
 

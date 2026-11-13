@@ -220,3 +220,12 @@ def test_oracle_keeps_the_message_with_the_key_and_collects_an_unrelated_old_one
 
     assert out == [3]
     assert heap[2].msg["content"] == "code is 4242 here"
+
+
+def test_forget_kills_an_old_message_and_refuses_a_root():
+    heap = [sys_msg(), user(1, "Read files."), reads(2, "a.txt", 1),
+            result(3, "a.txt", "old text " * 50, 1), reads(4, "b.txt", 2), result(5, "b.txt", "fresh", 2)]
+
+    done, refused = C.forget(heap, [3, 1, 5, 99])
+
+    assert (done, refused, heap[3].dead, heap[1].dead) == ([3], [1, 5, 99], True, False)

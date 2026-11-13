@@ -189,3 +189,70 @@ def test_call_to_a_tool_not_in_the_request_is_counted_and_the_run_continues():
     row = run_with(CallsMissingToolOnce())
 
     assert (row["unknown_tool_calls"], row["end"], row["success"]) == (1, "answered", True)
+
+
+class Hoarder(FakeAgent):
+    """Reads everything and never forgets; strips the [msg N] prefix manual mode adds."""
+
+    def call(self, name, **args):
+        self.last = name
+        return super().call(name, **args)
+
+    def __call__(self, messages, tools):
+        return super().__call__(self.plain(messages), tools)
+
+    @staticmethod
+    def plain(messages):
+        return [dict(m, content=re.sub(r"^\[msg \d+\] ", "", m["content"])) if m["role"] == "tool" else m
+                for m in messages if not (m["content"] or "").startswith("[memory]")]
+
+
+class Forgetful(Hoarder):
+    def __init__(self):
+        super().__init__()
+        self.facts, self.reads = {}, []
+
+    def __call__(self, messages, tools):
+        messages = [m for m in messages if not (m["content"] or "").startswith("[memory]")]
+        last = messages[-1]
+        if last["role"] == "tool" and getattr(self, "last", None) == "read_file":
+            self.facts.update(re.findall(r"project (\w+) is (\d+)", last["content"]))
+            old, self.reads = self.reads, [int(re.match(r"\[msg (\d+)\]", last["content"]).group(1))]
+            if old:
+                return self.reply(calls=self.call("forget", ids=old), messages=messages)
+        if self.to_read == [] and self.facts:
+            name = re.search(r"project (\w+)\?", messages[1]["content"]).group(1)
+            return self.reply(self.facts[name], messages=messages)
+        return super().__call__(messages, tools)
+
+
+def run_manual(model, budget=4000, pressure=False):
+    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    return agent.run(task, "fake/model", "manual", "threshold:0.7", budget, model, max_turns=200, pressure=pressure)[0]
+
+
+def test_manual_model_that_forgets_old_file_reads_answers_within_a_small_budget():
+    row = run_manual(Forgetful())
+
+    assert (row["end"], row["success"], row["forgets"]) == ("answered", True, 9)
+
+
+def test_manual_model_that_never_forgets_runs_out_of_memory():
+    row = run_manual(Hoarder())
+
+    assert (row["end"], row["success"], row["forgets"]) == ("oom", False, 0)
+
+
+def test_pressure_note_reports_usage_and_collected_count_of_a_small_heap():
+    import collectors as C
+    heap = [C.Obj(0, {"role": "user", "content": "x" * 400}, 0, root=True),
+            C.Obj(1, {"role": "tool", "content": "y"}, 0, dead=True)]
+
+    assert agent.pressure_note(heap, 200)["content"] == "[memory] context 57% of budget (115/200 tokens), 1 messages collected."
+
+
+def test_pressure_note_is_not_part_of_the_cached_prefix():
+    off = run_manual(Forgetful(), budget=8000, pressure=False)
+    on = run_manual(Forgetful(), budget=8000, pressure=True)
+
+    assert (off["stable_prefix_share"], on["stable_prefix_share"]) == (0.481, 0.481)
