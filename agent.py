@@ -1,4 +1,5 @@
 import argparse
+import copy
 import itertools
 import json
 import random
@@ -81,6 +82,16 @@ def call_tool(name, args, task, heap, turn):
     return f"error: unknown tool {name}"
 
 
+def common_prefix(prev, cur):
+    n = chars = 0
+    for a, b in zip(prev, cur):
+        a, b = json.dumps(a), json.dumps(b)
+        if a != b:
+            break
+        n, chars = n + 1, chars + len(a)
+    return n, chars
+
+
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False):
     heap, ids = [], itertools.count()
 
@@ -94,6 +105,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
              recalls=0, repeated_calls=0, max_context_tokens=0, max_est_tokens=0)
     if strategy == "oracle":
         st["oracle_keys"] = {task["answer"]}
+    prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
 
     turn = 0
@@ -109,7 +121,12 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             end = "oom"
             break
 
-        resp = complete([o.msg for o in heap], TOOLS)
+        msgs = [o.msg for o in heap]
+        n, chars = common_prefix(prev, msgs)
+        shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
+        cache_breaks += n < len(prev)
+        prev = copy.deepcopy(msgs)  # collectors mutate messages in place
+        resp = complete(msgs, TOOLS)
         u = resp.usage
         s["input_tokens"] += u.prompt_tokens
         s["output_tokens"] += u.completion_tokens
@@ -152,7 +169,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
            "trigger": trigger, "hints": hints, "budget": budget, "task_family": task["family"], "task_id": task["id"],
            "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end,
-           "answer": answer[:200], "turns": turn, **s, "wall_s": round(time.time() - t0, 1)}
+           "answer": answer[:200], "turns": turn, **s,
+           "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,
              "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
                        "label": o.label, "msg": o.msg, "saved": o.saved} for o in heap]}
