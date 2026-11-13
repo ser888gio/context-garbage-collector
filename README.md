@@ -96,10 +96,12 @@ The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --h
 `scripts/sweep.ps1` starts a sweep as a hidden, detached process that keeps running after the terminal closes, and prints its PID:
 
 ```
-powershell -File scripts/sweep.ps1 -Name sweep3 --models groq/openai/gpt-oss-120b --strategies mark_sweep,refcount --hints true --tag sweep3
+powershell -File scripts/sweep.ps1 -Name sweep3 --models groq/openai/gpt-oss-120b --strategies 'mark_sweep,refcount' --hints 'false,true' --tag sweep3
 ```
 
-Output goes to `results/<Name>.log` and `results/<Name>.err`; stop it with `Stop-Process -Id <PID>`. Watch progress at http://localhost:8000/analysis/dashboard.html after `python -m http.server 8000` from the repo root . `python -m analysis.results` regenerates [docs/RESULTS.md](docs/RESULTS.md).
+Quote comma lists inside PowerShell (`'false,true'`); unquoted, PowerShell splits them into separate arguments.
+
+Output goes to `results/<Name>.log` and `results/<Name>.err`; stop it with `Stop-Process -Id <PID>`. Watch progress at http://localhost:8000/analysis/dashboard.html after `python -m http.server 8000` from the repo root. `python -m analysis.results` regenerates [docs/RESULTS.md](docs/RESULTS.md).
 
 Inspect runs:
 - `analysis.timeline`: heap timeline plot for one run, `python -m analysis.timeline results/traces/<run_id>.json`.
