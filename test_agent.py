@@ -96,3 +96,27 @@ def test_run_row_records_hints_setting():
     row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, FakeAgent(), max_turns=200, hints=True)
 
     assert row["hints"] is True
+
+
+def test_common_prefix_of_an_append_only_list_is_the_whole_previous_list():
+    assert agent.common_prefix([{"a": 1}, {"b": 2}], [{"a": 1}, {"b": 2}, {"c": 3}]) == (2, 16)
+
+
+def test_common_prefix_stops_at_an_edited_middle_message():
+    assert agent.common_prefix([{"a": 1}, {"b": 2}, {"c": 3}], [{"a": 1}, {"b": 9}, {"c": 3}]) == (1, 8)
+
+
+def test_common_prefix_is_empty_when_the_first_message_is_edited():
+    assert agent.common_prefix([{"a": 1}, {"b": 2}], [{"a": 9}, {"b": 2}]) == (11, 0.373)
+
+
+def test_append_only_run_never_breaks_the_cache():
+    row = run("none", budget=100_000)
+
+    assert row["cache_breaks"] == 0
+
+
+def test_mark_sweep_run_breaks_the_cache_and_lowers_prefix_share():
+    row = run("mark_sweep", budget=4000)
+
+    assert (row["cache_breaks"], row["stable_prefix_share"]) == (11, 0.373)
