@@ -16,6 +16,8 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H8 | Simple LRU masking is as good as the smarter collectors (as in "The Complexity Trap"). | lru_mask vs mark_sweep/generational: success and tokens. | open |
 | H9 | GC can make the agent thrash: recall, re-collect, recall again. | repeated recalls of the same id in traces. | open |
 | H10 | The oracle sets the upper bound; real collectors reach X% of its success at Y% of its tokens. | `oracle` vs each strategy: success and input_tokens; `audit.py` for what each lost. | open |
+| H11 | On multi-hop tasks mark-sweep beats LRU/truncate, because it follows reference chains. | `--family multihop`: success and recalls of mark_sweep vs lru_mask/truncate. | open |
+| H12 | A write barrier removes stale facts and fixes poisoning. | `--family poison`: success of write_barrier vs mark_sweep. | open |
 | H13 | A model managing its own memory (manual forget) does worse than a 20-line algorithm. | `manual` vs `mark_sweep`/`lru_mask`: success, oom rate, `forgets`. | open |
 | H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | open |
 
@@ -27,10 +29,11 @@ Done:
 - Needle task, agent loop, resumable sweep CLI, offline tests
 - `timeline.py`: per-run GC log plot (message x turn grid, context size panel)
 - `report.py`: results table and success-vs-tokens plot
+- Task families: multihop (answer needs two files) and poisoning (wrong fact corrected later); `write_barrier` strategy
 
 Next:
 1. First sweep on free models; write findings to `JOURNAL.md`.
-2. Task families: poisoning (wrong fact corrected later), long chat, research.
+2. More task families: long chat, research.
 3. Vary needle position (lost-in-the-middle) and budget.
 4. New strategies: LLM-based reference finder, summarize instead of stub.
 5. Repeat the best strategies on a stronger model.

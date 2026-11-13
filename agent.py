@@ -2,23 +2,15 @@ import argparse
 import copy
 import itertools
 import json
-import random
 import time
 import uuid
 from pathlib import Path
 
 import collectors as C
+from tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
 
 RESULTS = Path("results")
 RUNS = RESULTS / "runs.jsonl"
-
-WORDS = """river stone quiet window garden paper light morning table bridge forest cloud simple
-green market letter yellow honest silver planet engine summer winter careful bottle mountain
-little thunder pocket golden distant candle music silent harbor velvet lantern meadow copper
-narrow gentle orchard ribbon shadow travel wooden village mirror island autumn basket feather
-kettle ladder marble needle pillow saddle tunnel valley wander anchor blanket circle dinner
-garage hollow jacket lemon mitten orange parcel rocket sugar tomato violet whistle""".split()
-NAMES = ["ORION", "ORIOLE", "ORINOCO", "OREGANO", "ORACLE", "ORCHID", "ORBITAL", "ORPHEUS"]
 
 SYSTEM = ("You are a careful agent working with tools. To save space, older messages may be replaced by "
           "'[collected: msg N ...]' stubs. If you need what a stub held, call recall with its id.")
@@ -41,32 +33,6 @@ FORGET_TOOL = {"type": "function", "function": {
 
 class RateLimited(Exception):
     pass
-
-
-def needle_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=False):
-    rng = random.Random(seed)
-    names = rng.sample(NAMES, 4)
-    codes = rng.sample(range(1000, 10000), 4)
-    needle_at = min(n_files - 1, int(position * n_files))
-    fact_files = [needle_at] + rng.sample([i for i in range(n_files) if i != needle_at], 3)
-    files = {}
-    for i in range(n_files):
-        body = [rng.choice(WORDS) for _ in range(words_per_file)]
-        if i in fact_files:
-            j = fact_files.index(i)
-            body.insert(words_per_file // 2, f". The access code for project {names[j]} is {codes[j]}. ")
-        files[f"notes/{i:02d}.txt"] = " ".join(body)
-    question = f"What is the access code for project {names[0]}? Reply with just the number."
-    then = f"Then answer: {question}" if upfront else "When you have read all of them, reply with exactly DONE."
-    return {
-        "family": "needle",
-        "id": f"needle-p{position}-{'up' if upfront else 'late'}-n{n_files}-s{seed}",
-        "files": files,
-        "prompt": f"The notes/ folder has {n_files} note files. Read every one with read_file, one per call. {then}",
-        "question": question,
-        "answer": str(codes[0]),
-        "upfront": upfront,
-    }
 
 
 def cost_of(resp):
@@ -202,7 +168,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
            "trigger": trigger, "hints": hints, "pressure": pressure, "budget": budget, "task_family": task["family"], "task_id": task["id"],
-           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end, "error": error,
+           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer and not (task.get("wrong") and task["wrong"] in answer), "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,
@@ -257,6 +223,7 @@ def main():
     p.add_argument("--triggers", default="threshold:0.7", help="comma list of every_turn / threshold:P")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--positions", default="0.5")
+    p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
@@ -272,11 +239,11 @@ def main():
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
-        cells = itertools.product(a.upfront.split(","), map(float, a.positions.split(",")),
+        cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
                                   [h == "true" for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
-        for upfront, pos, seed, trigger, strategy, hints, pressure in cells:
-            task = needle_task(seed, a.n_files, position=pos, upfront=upfront == "true")
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure in cells:
+            task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
             if (model, strategy, trigger, hints, pressure, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())

@@ -2,7 +2,10 @@ import json
 import re
 from types import SimpleNamespace as NS
 
+import pytest
+
 import agent
+import tasks
 
 
 class FakeAgent:
@@ -19,6 +22,12 @@ class FakeAgent:
         usage = NS(prompt_tokens=sum(len(json.dumps(m)) for m in messages) // 4, completion_tokens=5)
         return NS(choices=[NS(message=NS(content=content, tool_calls=calls))], usage=usage)
 
+    def find(self, messages, name):
+        for m in messages:
+            hit = re.search(rf"project {name} is (\d+)", m.get("content") or "")
+            if hit:
+                return hit.group(1)
+
     def __call__(self, messages, tools):
         if self.to_read is None:
             self.to_read = []
@@ -31,16 +40,31 @@ class FakeAgent:
         if "access code" not in question:
             return self.reply("DONE", messages=messages)
         name = re.search(r"project (\w+)\?", question).group(1)
-        for m in messages:
-            hit = re.search(rf"project {name} is (\d+)", m.get("content") or "")
-            if hit:
-                return self.reply(hit.group(1), messages=messages)
+        if (found := self.find(messages, name)) is not None:
+            return self.reply(found, messages=messages)
         stubs = [int(i) for m in messages for i in re.findall(r"call recall\((\d+)\)", m.get("content") or "")]
         fresh = [i for i in stubs if i not in self.recalled]
         if fresh:
             self.recalled.add(fresh[0])
             return self.reply(calls=self.call("recall", id=fresh[0]), messages=messages)
         return self.reply("I don't know", messages=messages)
+
+
+class FakeHopAgent(FakeAgent):
+    """Follows 'same as the code for project X' links before reporting a value."""
+
+    def find(self, messages, name):
+        for _ in range(3):
+            for m in messages:
+                content = m.get("content") or ""
+                if hit := re.search(rf"project {name} is (\d+)", content):
+                    return hit.group(1)
+                if hop := re.search(rf"project {name} is the same as the code for project (\w+)", content):
+                    name = hop.group(1)
+                    break
+            else:
+                return None
+        return None
 
 
 def run(strategy, budget, upfront=False, trigger="threshold:0.7"):
@@ -256,3 +280,61 @@ def test_pressure_note_is_not_part_of_the_cached_prefix():
     on = run_manual(Forgetful(), budget=8000, pressure=True)
 
     assert (off["stable_prefix_share"], on["stable_prefix_share"]) == (0.481, 0.481)
+
+
+def run_hop(strategy, budget, upfront):
+    task = tasks.multihop_task(seed=7, n_files=10, position=0.5, upfront=upfront)
+    return agent.run(task, "fake/model", strategy, "threshold:0.7", budget, FakeHopAgent(), max_turns=200)[0]
+
+
+def test_multihop_puts_the_link_and_the_value_in_different_files():
+    task = tasks.multihop_task(seed=7, n_files=10, position=0.5)
+
+    assert [p for p, body in task["files"].items() if "is the same as the code for project VEGA" in body] == ["notes/05.txt"]
+    assert [p for p, body in task["files"].items() if "project VEGA is 7468" in body] == ["notes/09.txt"]
+    assert (task["id"], task["family"], task["answer"]) == ("multihop-p0.5-late-n10-s7", "multihop", "7468")
+
+
+def test_poison_puts_the_old_code_early_and_the_correction_later():
+    task = tasks.poison_task(seed=7, n_files=10)
+
+    assert [p for p, body in task["files"].items() if "project ORION is 7468." in body] == ["notes/02.txt"]
+    assert [p for p, body in task["files"].items() if "ORION is now 1791; the old code 7468 is revoked" in body] == ["notes/03.txt"]
+    assert (task["id"], task["answer"], task["wrong"]) == ("poison-p0.2-late-n10-s7", "1791", "7468")
+
+
+def test_task_builders_are_deterministic():
+    assert tasks.multihop_task(seed=3) == tasks.multihop_task(seed=3)
+    assert tasks.poison_task(seed=3) == tasks.poison_task(seed=3)
+
+
+def test_mark_sweep_follows_the_reference_chain_on_multihop_with_zero_recalls():
+    row = run_hop("mark_sweep", budget=4000, upfront=True)
+
+    assert (row["end"], row["success"], row["recalls"]) == ("answered", True, 0)
+
+
+def test_mark_sweep_recalls_eleven_times_on_multihop_when_the_question_comes_late():
+    row = run_hop("mark_sweep", budget=4000, upfront=False)
+
+    assert (row["end"], row["success"], row["recalls"]) == ("answered", True, 11)
+
+
+@pytest.mark.parametrize("strategy", ["truncate", "lru_mask"])
+def test_truncate_and_lru_fail_multihop_even_after_eleven_recalls(strategy):
+    row = run_hop(strategy, budget=4000, upfront=True)
+
+    assert (row["success"], row["recalls"], row["answer"]) == (False, 11, "I don't know")
+
+
+def answer_poison(answer):
+    task = tasks.poison_task(seed=7, n_files=10, upfront=True)
+
+    def complete(messages, tools):
+        return FakeAgent().reply(answer, messages=messages)
+    return agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, complete)[0]["success"]
+
+
+@pytest.mark.parametrize("answer,success", [("1791", True), ("7468", False), ("changed from 7468 to 1791", False)])
+def test_poison_scoring_requires_the_new_code_and_rejects_the_revoked_one(answer, success):
+    assert answer_poison(answer) is success

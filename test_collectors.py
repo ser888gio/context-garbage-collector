@@ -229,3 +229,37 @@ def test_forget_kills_an_old_message_and_refuses_a_root():
     done, refused = C.forget(heap, [3, 1, 5, 99])
 
     assert (done, refused, heap[3].dead, heap[1].dead) == ([3], [1, 5, 99], True, False)
+
+
+def test_write_barrier_collects_the_superseded_message_and_keeps_the_newer_one():
+    heap = [sys_msg(), user(1, "What is the code for ORION?"),
+            reads(2, "a.txt", 1), result(3, "a.txt", "The access code for project ORION is 4821.", 1),
+            reads(4, "b.txt", 2),
+            result(5, "b.txt", "Correction: the access code for project ORION is now 7310; the old code 4821 is revoked.", 2),
+            reads(6, "c.txt", 3), result(7, "c.txt", "latest", 3)]
+
+    collected = C.write_barrier(heap, {"budget": 100})
+
+    assert (3 in collected, heap[3].dead, heap[5].dead) == (True, True, False)
+
+
+def test_mark_sweep_keeps_the_stale_message_that_write_barrier_collects():
+    heap = [sys_msg(), user(1, "What is the code for ORION?"),
+            reads(2, "a.txt", 1), result(3, "a.txt", "The access code for project ORION is 4821.", 1),
+            reads(4, "b.txt", 2), result(5, "b.txt", "The access code for project ORION is 7310.", 2),
+            reads(6, "c.txt", 3), result(7, "c.txt", "latest", 3)]
+
+    C.mark_sweep(heap, {"budget": 100})
+
+    assert heap[3].dead is False
+
+
+def test_write_barrier_keeps_facts_about_different_keys():
+    heap = [sys_msg(), user(1, "What is the code for ORION or VEGA?"),
+            reads(2, "a.txt", 1), result(3, "a.txt", "The access code for project ORION is 4821.", 1),
+            reads(4, "b.txt", 2), result(5, "b.txt", "The access code for project VEGA is 7310.", 2),
+            reads(6, "c.txt", 3), result(7, "c.txt", "latest", 3)]
+
+    C.write_barrier(heap, {"budget": 100})
+
+    assert [heap[3].dead, heap[5].dead] == [False, False]
