@@ -21,14 +21,14 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 Done:
 - Collectors: none, truncate, lru_mask, refcount, mark_sweep, generational
 - Needle task, agent loop, resumable sweep CLI, offline tests
+- `report.py`: results table and success-vs-tokens plot
 
 Next:
 1. First sweep on free models; write findings to `JOURNAL.md`.
-2. `report.py`: results table and success-vs-tokens plot.
-3. Task families: poisoning (wrong fact corrected later), long chat, research.
-4. Vary needle position (lost-in-the-middle) and budget.
-5. New strategies: LLM-based reference finder, summarize instead of stub.
-6. Repeat the best strategies on a stronger model.
+2. Task families: poisoning (wrong fact corrected later), long chat, research.
+3. Vary needle position (lost-in-the-middle) and budget.
+4. New strategies: LLM-based reference finder, summarize instead of stub.
+5. Repeat the best strategies on a stronger model.
 
 ## Known limits
 
