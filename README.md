@@ -6,6 +6,48 @@ The context is the heap and each message or tool result is an object. Roots are 
 
 Status: early-stage experiment; results in JOURNAL.md.
 
+## How it works
+
+One run: the agent works through a task while a collector keeps its context under a token budget.
+
+```mermaid
+flowchart TD
+    S[agent.py sweep<br/>model x strategy x hints x seed] --> T[needle task<br/>30 note files, one holds the answer]
+    T --> H[(heap<br/>messages as objects)]
+    H --> C{context over<br/>70% of budget?}
+    C -- yes --> G[collector<br/>mark_sweep / refcount / ...<br/>old messages become stubs]
+    C -- no --> O
+    G --> O{still over<br/>budget?}
+    O -- yes --> X[end: oom]
+    O -- no --> L[LLM call via LiteLLM<br/>Gemini / Groq / OpenRouter]
+    L --> A{tool call?}
+    A -- read_file / list_files --> H
+    A -- "recall(id)" --> R[restore a stub] --> H
+    A -- text answer --> E[end: answered<br/>success = answer matches]
+    X --> W[(results/runs.jsonl<br/>results/traces/)]
+    E --> W
+    W --> P[report.py / audit.py / timeline.py]
+```
+
+What a collector sees: messages are objects, roots are always kept, and a message is a reference
+to an older one when they share a key (file path, CAPS name, 4+ digit number).
+
+```mermaid
+flowchart LR
+    SYS[system prompt<br/>root]:::root
+    TASK[task<br/>root]:::root
+    A1[assistant: read notes/03.txt] --> R1[tool: notes/03.txt<br/>... ORION is 4821 ...]
+    A2[assistant: read notes/04.txt] --> R2[tool: notes/04.txt<br/>filler]
+    Q[question: code for ORION?<br/>root]:::root --> R1
+    NEW[newest turn<br/>protected]:::root
+    R2:::dead
+    A2:::dead
+    classDef root fill:#dbeafe,stroke:#2563eb
+    classDef dead fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4
+```
+
+Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call recall(N) to restore]`.
+
 ## Strategies
 
 | Name | Rule |
