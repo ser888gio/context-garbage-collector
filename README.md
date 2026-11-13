@@ -4,7 +4,7 @@ What happens when classic garbage-collection algorithms manage an LLM agent's co
 
 The context is the heap and each message or tool result is an object. Roots are the system prompt, the task, and the latest turn. References between messages are found with regexes (file paths, CAPS names, numbers). When the context nears a fixed budget, a collector replaces unreachable messages with short stubs such as `[collected: msg 12, read_file a.py]`. The agent has a `recall` tool to bring a stub back, and every recall is logged because a recall means the collector was wrong.
 
-Status: early-stage experiment; results in JOURNAL.md.
+Status: early-stage experiment; results in docs/JOURNAL.md.
 
 ## How it works
 
@@ -12,7 +12,7 @@ One run: the agent works through a task while a collector keeps its context unde
 
 ```mermaid
 flowchart TD
-    S[agent.py sweep<br/>model x strategy x hints x seed] --> T[needle task<br/>30 note files, one holds the answer]
+    S[cgc.agent sweep<br/>model x strategy x hints x seed] --> T[needle task<br/>30 note files, one holds the answer]
     T --> H[(heap<br/>messages as objects)]
     H --> C{context over<br/>70% of budget?}
     C -- yes --> G[collector<br/>mark_sweep / refcount / ...<br/>old messages become stubs]
@@ -26,7 +26,7 @@ flowchart TD
     A -- text answer --> E[end: answered<br/>success = answer matches]
     X --> W[(results/runs.jsonl<br/>results/traces/)]
     E --> W
-    W --> P[report.py / audit.py / timeline.py]
+    W --> P[analysis.report / audit / timeline]
 ```
 
 What a collector sees: messages are objects, roots are always kept, and a message is a reference
@@ -67,7 +67,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 ## Quickstart
 
 ```
-pip install litellm python-dotenv pandas matplotlib tabulate pytest hypothesis
+pip install -e ".[test]"
 ```
 
 Create a `.env` file with the keys for the providers you use:
@@ -82,18 +82,18 @@ Run the offline tests, then a small sweep, then the report:
 
 ```
 python -m pytest -q
-python agent.py --models openrouter/nvidia/nemotron-3.5-lightning:free \
+python -m cgc.agent --models openrouter/nvidia/nemotron-3.5-lightning:free \
     --strategies none,truncate,mark_sweep --triggers threshold:0.7 --seeds 0,1,2 --max-cost 0
-python report.py
+python -m analysis.report
 ```
 
 `--family needle,multihop,poison` picks the task family (default `needle`).
 
-The sweep is resumable: finished cells are skipped. Run `python agent.py --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
+The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
 Inspect runs:
-- `timeline.py`: heap timeline plot for one run, `python timeline.py results/traces/<run_id>.json`.
-- `audit.py`: checks whether the collector dropped the needle, `python audit.py`.
+- `analysis.timeline`: heap timeline plot for one run, `python -m analysis.timeline results/traces/<run_id>.json`.
+- `analysis.audit`: checks whether the collector dropped the needle, `python -m analysis.audit`.
 
 ## What gets recorded
 
@@ -102,16 +102,16 @@ One row per run in `results/runs.jsonl`:
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
 - GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `summary_calls`, `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
 - size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
-- leak (computed by `report.py`, not stored): `excess_tokens`, mean prompt tokens per turn minus the oracle run's for the same model, task and hints
+- leak (computed by `analysis.report`, not stored): `excess_tokens`, mean prompt tokens per turn minus the oracle run's for the same model, task and hints
 - cache behavior: `stable_prefix_share`, `cache_breaks`
 
 Full transcripts and the final heap of each run are in `results/traces/<run_id>.json`. Neither `results/traces/` nor `.env` is committed.
 
 ## More
 
-- [SPEC.md](SPEC.md): design, heap model, variables, stack.
-- [HYPOTHESES.md](HYPOTHESES.md): what we test, and the roadmap.
-- [JOURNAL.md](JOURNAL.md): dated observations.
+- [SPEC.md](docs/SPEC.md): design, heap model, variables, stack.
+- [HYPOTHESES.md](docs/HYPOTHESES.md): what we test, and the roadmap.
+- [JOURNAL.md](docs/JOURNAL.md): dated observations.
 
 Prior art:
 - [MemGPT](https://arxiv.org/abs/2310.08560)

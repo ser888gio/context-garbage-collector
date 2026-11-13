@@ -1,0 +1,15 @@
+[project]
+name = "context-garbage-collector"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["litellm", "python-dotenv", "pandas", "matplotlib", "tabulate"]
+
+[project.optional-dependencies]
+test = ["pytest", "hypothesis"]
+
+[tool.setuptools]
+packages = ["cgc", "analysis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -4,8 +4,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-import agent
-import tasks
+from cgc import agent
+from cgc import tasks
 
 
 class FakeAgent:
@@ -283,7 +283,7 @@ def test_manual_model_that_never_forgets_runs_out_of_memory():
 
 
 def test_pressure_note_reports_usage_and_collected_count_of_a_small_heap():
-    import collectors as C
+    from cgc import collectors as C
     heap = [C.Obj(0, {"role": "user", "content": "x" * 400}, 0, root=True),
             C.Obj(1, {"role": "tool", "content": "y"}, 0, dead=True)]
 

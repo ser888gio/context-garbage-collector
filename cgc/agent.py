@@ -6,8 +6,8 @@ import time
 import uuid
 from pathlib import Path
 
-import collectors as C
-from tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
+from cgc import collectors as C
+from cgc.tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
 
 RESULTS = Path("results")
 RUNS = RESULTS / "runs.jsonl"
@@ -247,7 +247,7 @@ def main():
     a = p.parse_args()
 
     from dotenv import load_dotenv
-    load_dotenv(".env")
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
