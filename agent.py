@@ -1,4 +1,5 @@
 import argparse
+import copy
 import itertools
 import json
 import random
@@ -81,7 +82,17 @@ def call_tool(name, args, task, heap, turn):
     return f"error: unknown tool {name}"
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80):
+def common_prefix(prev, cur):
+    n = chars = 0
+    for a, b in zip(prev, cur):
+        a, b = json.dumps(a), json.dumps(b)
+        if a != b:
+            break
+        n, chars = n + 1, chars + len(a)
+    return n, chars
+
+
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
@@ -89,9 +100,10 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80):
 
     add({"role": "system", "content": SYSTEM}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
-    st = {"budget": budget, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
+    st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
              recalls=0, repeated_calls=0, max_context_tokens=0, max_est_tokens=0)
+    prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
 
     turn = 0
@@ -107,7 +119,12 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80):
             end = "oom"
             break
 
-        resp = complete([o.msg for o in heap], TOOLS)
+        msgs = [o.msg for o in heap]
+        n, chars = common_prefix(prev, msgs)
+        shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
+        cache_breaks += n < len(prev)
+        prev = copy.deepcopy(msgs)  # collectors mutate messages in place
+        resp = complete(msgs, TOOLS)
         u = resp.usage
         s["input_tokens"] += u.prompt_tokens
         s["output_tokens"] += u.completion_tokens
@@ -148,9 +165,10 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80):
             add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "budget": budget, "task_family": task["family"], "task_id": task["id"],
+           "trigger": trigger, "hints": hints, "budget": budget, "task_family": task["family"], "task_id": task["id"],
            "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end,
-           "answer": answer[:200], "turns": turn, **s, "wall_s": round(time.time() - t0, 1)}
+           "answer": answer[:200], "turns": turn, **s,
+           "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,
              "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
                        "label": o.label, "msg": o.msg, "saved": o.saved} for o in heap]}
@@ -204,6 +222,7 @@ def main():
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--positions", default="0.5")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
+    p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
     p.add_argument("--max-turns", type=int, default=80)
@@ -212,23 +231,24 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(".env")
-    done = {(r["model"], r["strategy"], r["trigger"], r["budget"], r["task_id"]) for r in load_runs()}
+    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.upfront.split(","), map(float, a.positions.split(",")),
-                                  map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","))
-        for upfront, pos, seed, trigger, strategy in cells:
+                                  map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
+                                  [h == "true" for h in a.hints.split(",")])
+        for upfront, pos, seed, trigger, strategy, hints in cells:
             task = needle_task(seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, a.budget, task["id"]) in done:
+            if (model, strategy, trigger, hints, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break
