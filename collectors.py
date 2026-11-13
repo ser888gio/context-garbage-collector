@@ -73,7 +73,7 @@ def kill(o, hints=False):
     o.dead = True
     content = o.msg.get("content")
     what = f"msg {o.id} {o.label}".strip()
-    found = sorted(keys(o))[:6] if hints else []
+    found = sorted(k for k in keys(o) if k not in o.label)[:6] if hints else []
     what += f" — keys: {', '.join(found)}" if found else ""
     stub = f"[collected: {what}; call recall({o.id}) to restore]"
     if content and o.saved is None and len(stub) < len(content):
