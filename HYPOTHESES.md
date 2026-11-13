@@ -21,6 +21,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 Done:
 - Collectors: none, truncate, lru_mask, refcount, mark_sweep, generational
 - Needle task, agent loop, resumable sweep CLI, offline tests
+- `timeline.py`: per-run GC log plot (message x turn grid, context size panel)
 
 Next:
 1. First sweep on free models; write findings to `JOURNAL.md`.
