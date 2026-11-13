@@ -107,7 +107,7 @@ def test_common_prefix_stops_at_an_edited_middle_message():
 
 
 def test_common_prefix_is_empty_when_the_first_message_is_edited():
-    assert agent.common_prefix([{"a": 1}, {"b": 2}], [{"a": 9}, {"b": 2}]) == (11, 0.373)
+    assert agent.common_prefix([{"a": 1}, {"b": 2}], [{"a": 9}, {"b": 2}]) == (0, 0)
 
 
 def test_append_only_run_never_breaks_the_cache():
