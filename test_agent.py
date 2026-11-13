@@ -98,6 +98,12 @@ def test_run_row_records_hints_setting():
     assert row["hints"] is True
 
 
+def test_oracle_answers_with_zero_recalls_under_a_small_budget():
+    row = run("oracle", budget=4000)
+
+    assert (row["end"], row["success"], row["recalls"]) == ("answered", True, 0)
+
+
 def test_common_prefix_of_an_append_only_list_is_the_whole_previous_list():
     assert agent.common_prefix([{"a": 1}, {"b": 2}], [{"a": 1}, {"b": 2}, {"c": 3}]) == (2, 16)
 

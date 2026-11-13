@@ -181,4 +181,12 @@ def generational(heap, st):
     return out
 
 
-STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, generational)}
+def oracle(heap, st):
+    out = [o for o in collectable(heap)
+           if not any(k in (o.saved if o.saved is not None else o.msg.get("content") or "") for k in st.get("oracle_keys", ()))]
+    for o in out:
+        kill(o, st.get("hints", False))
+    return [o.id for o in out]
+
+
+STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, generational, oracle)}

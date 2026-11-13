@@ -103,6 +103,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
              recalls=0, repeated_calls=0, max_context_tokens=0, max_est_tokens=0)
+    if strategy == "oracle":
+        st["oracle_keys"] = {task["answer"]}
     prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
 
