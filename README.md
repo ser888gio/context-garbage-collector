@@ -59,6 +59,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 | `mark_sweep` | Stub objects unreachable from the roots. |
 | `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
+| `manual` | Collects nothing automatically. The model gets a `forget(ids)` tool (tool results show `[msg N]`), always sees the memory-pressure note, and runs out of memory if it never forgets. |
 | `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
 
 ## Quickstart
@@ -86,7 +87,7 @@ python report.py
 
 `--family needle,multihop,poison` picks the task family (default `needle`).
 
-The sweep is resumable: finished cells are skipped. Run `python agent.py --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
+The sweep is resumable: finished cells are skipped. Run `python agent.py --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
 Inspect runs:
 - `timeline.py`: heap timeline plot for one run, `python timeline.py results/traces/<run_id>.json`.
@@ -95,9 +96,9 @@ Inspect runs:
 ## What gets recorded
 
 One row per run in `results/runs.jsonl`:
-- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `budget`, `task_family`, `task_id`, `provider`, `model`
+- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
 - size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
 - cache behavior: `stable_prefix_share`, `cache_breaks`
 

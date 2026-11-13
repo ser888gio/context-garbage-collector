@@ -206,6 +206,20 @@ def generational(heap, st):
     return out
 
 
+def forget(heap, ids, hints=False):
+    t = now(heap)
+    by_id = {o.id: o for o in heap}
+    done, refused = [], []
+    for i in ids:
+        o = by_id.get(i)
+        if o is None or o.dead or protected(o, t):
+            refused.append(i)
+        else:
+            kill(o, hints)
+            done.append(i)
+    return done, refused
+
+
 def oracle(heap, st):
     out = [o for o in collectable(heap)
            if not any(k in (o.saved if o.saved is not None else o.msg.get("content") or "") for k in st.get("oracle_keys", ()))]
@@ -215,3 +229,4 @@ def oracle(heap, st):
 
 
 STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, refcount, mark_sweep, write_barrier, generational, oracle)}
+STRATEGIES["manual"] = none
