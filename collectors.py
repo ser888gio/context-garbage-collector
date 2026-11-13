@@ -69,10 +69,12 @@ def collectable(heap):
     return [o for o in heap if o.live and not protected(o, t)]
 
 
-def kill(o):
+def kill(o, hints=False):
     o.dead = True
     content = o.msg.get("content")
     what = f"msg {o.id} {o.label}".strip()
+    found = sorted(keys(o))[:6] if hints else []
+    what += f" — keys: {', '.join(found)}" if found else ""
     stub = f"[collected: {what}; call recall({o.id}) to restore]"
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
@@ -115,7 +117,7 @@ def truncate(heap, st):
     for o in collectable(heap):
         if size(heap) <= target:
             break
-        kill(o)
+        kill(o, st.get("hints", False))
         out.append(o.id)
     return out
 
@@ -130,7 +132,7 @@ def lru_mask(heap, st):
                 o.last_used = u.turn
     out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.last_used >= st.get("lru_turns", 3)]
     for o in out:
-        kill(o)
+        kill(o, st.get("hints", False))
     return [o.id for o in out]
 
 
@@ -146,7 +148,7 @@ def refcount(heap, st):
             if protected(o, t):
                 continue
             if not any(r.id != o.id and r.is_referencer and k[r.id] & k[o.id] for r in live):
-                kill(o)
+                kill(o, st.get("hints", False))
                 out.append(o.id)
                 changed = True
                 break
@@ -157,7 +159,7 @@ def mark_sweep(heap, st):
     seen = reachable(heap)
     out = [o for o in collectable(heap) if o.id not in seen]
     for o in out:
-        kill(o)
+        kill(o, st.get("hints", False))
     return [o.id for o in out]
 
 
@@ -171,7 +173,7 @@ def generational(heap, st):
         if o.id in seen:
             o.survived += 1
         else:
-            kill(o)
+            kill(o, st.get("hints", False))
             out.append(o.id)
     st["major"] = size(heap) > st["budget"] * st.get("threshold", 0.7)
     if st["major"]:

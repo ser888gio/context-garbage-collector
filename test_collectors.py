@@ -193,3 +193,20 @@ def test_every_collected_message_can_be_restored_verbatim(name, heap, budget):
             C.restore(heap, o.id, 99)
 
     assert {o.id: o.msg["content"] for o in heap} == original
+
+
+def test_hint_stub_lists_sorted_keys_of_the_collected_message():
+    o = result(12, "notes/12.txt", "ORION code is 4821. " + "plain filler words " * 10, 1)
+
+    C.kill(o, hints=True)
+
+    assert o.msg["content"] == "[collected: msg 12 read_file notes/12.txt — keys: 4821, ORION, notes/12.txt; call recall(12) to restore]"
+
+
+def test_hint_stub_has_no_keys_part_when_content_has_no_keys():
+    o = result(12, "notes/12.txt", "just some plain lowercase words " * 5, 1)
+    o.label = "read_file"
+
+    C.kill(o, hints=True)
+
+    assert o.msg["content"] == "[collected: msg 12 read_file; call recall(12) to restore]"

@@ -88,3 +88,11 @@ def test_needle_sits_in_the_file_at_the_requested_position():
 
 def test_same_seed_builds_the_same_task():
     assert agent.needle_task(seed=3) == agent.needle_task(seed=3)
+
+
+def test_run_row_records_hints_setting():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+
+    row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, FakeAgent(), max_turns=200, hints=True)
+
+    assert row["hints"] is True
