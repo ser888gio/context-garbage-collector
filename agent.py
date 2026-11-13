@@ -2,23 +2,15 @@ import argparse
 import copy
 import itertools
 import json
-import random
 import time
 import uuid
 from pathlib import Path
 
 import collectors as C
+from tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
 
 RESULTS = Path("results")
 RUNS = RESULTS / "runs.jsonl"
-
-WORDS = """river stone quiet window garden paper light morning table bridge forest cloud simple
-green market letter yellow honest silver planet engine summer winter careful bottle mountain
-little thunder pocket golden distant candle music silent harbor velvet lantern meadow copper
-narrow gentle orchard ribbon shadow travel wooden village mirror island autumn basket feather
-kettle ladder marble needle pillow saddle tunnel valley wander anchor blanket circle dinner
-garage hollow jacket lemon mitten orange parcel rocket sugar tomato violet whistle""".split()
-NAMES = ["ORION", "ORIOLE", "ORINOCO", "OREGANO", "ORACLE", "ORCHID", "ORBITAL", "ORPHEUS"]
 
 SYSTEM = ("You are a careful agent working with tools. To save space, older messages may be replaced by "
           "'[collected: msg N ...]' stubs. If you need what a stub held, call recall with its id.")
@@ -34,36 +26,15 @@ TOOLS = [
                                       "parameters": {"type": "object", "properties": {"id": {"type": "integer"}},
                                                      "required": ["id"]}}},
 ]
+FORGET_TOOL = {"type": "function", "function": {
+    "name": "forget", "description": "Free memory: collect old messages by id (tool results show [msg N]). "
+                                     "The system prompt, task and newest turn are refused.",
+    "parameters": {"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "integer"}}},
+                   "required": ["ids"]}}}
 
 
 class RateLimited(Exception):
     pass
-
-
-def needle_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=False):
-    rng = random.Random(seed)
-    names = rng.sample(NAMES, 4)
-    codes = rng.sample(range(1000, 10000), 4)
-    needle_at = min(n_files - 1, int(position * n_files))
-    fact_files = [needle_at] + rng.sample([i for i in range(n_files) if i != needle_at], 3)
-    files = {}
-    for i in range(n_files):
-        body = [rng.choice(WORDS) for _ in range(words_per_file)]
-        if i in fact_files:
-            j = fact_files.index(i)
-            body.insert(words_per_file // 2, f". The access code for project {names[j]} is {codes[j]}. ")
-        files[f"notes/{i:02d}.txt"] = " ".join(body)
-    question = f"What is the access code for project {names[0]}? Reply with just the number."
-    then = f"Then answer: {question}" if upfront else "When you have read all of them, reply with exactly DONE."
-    return {
-        "family": "needle",
-        "id": f"needle-p{position}-{'up' if upfront else 'late'}-n{n_files}-s{seed}",
-        "files": files,
-        "prompt": f"The notes/ folder has {n_files} note files. Read every one with read_file, one per call. {then}",
-        "question": question,
-        "answer": str(codes[0]),
-        "upfront": upfront,
-    }
 
 
 def cost_of(resp):
@@ -94,17 +65,24 @@ def common_prefix(prev, cur):
     return n, chars
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False):
+def pressure_note(heap, budget):
+    used = C.size(heap)
+    return {"role": "user", "content": f"[memory] context {used * 100 // budget}% of budget ({used}/{budget} tokens), "
+                                       f"{sum(o.dead for o in heap)} messages collected."}
+
+
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
         heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, touched=turn, last_used=turn))
+        return heap[-1]
 
     add({"role": "system", "content": SYSTEM}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, forgets=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
         resp = complete([{"role": "system", "content": SUMMARY_SYSTEM},
@@ -121,7 +99,9 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     prev, shares, cache_breaks = [], [], 0
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
     error = ""
-    known = {t["function"]["name"] for t in TOOLS}
+    manual = strategy == "manual"
+    tools = TOOLS + [FORGET_TOOL] * manual
+    known = {t["function"]["name"] for t in tools}
 
     turn = 0
     for turn in range(1, max_turns + 1):
@@ -142,7 +122,10 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         cache_breaks += n < len(prev)
         prev = copy.deepcopy(msgs)  # collectors mutate messages in place
         try:
-            resp = complete(msgs, TOOLS)
+            # The note is appended after the prefix accounting above and never stored in the heap,
+            # so it can't break the cached prefix or show up in later turns.
+            note = [pressure_note(heap, budget)] if pressure or manual else []
+            resp = complete(msgs + note, tools)
         except RateLimited:
             raise
         except Exception as e:
@@ -185,13 +168,20 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             elif sig in seen_calls:
                 s["repeated_calls"] += 1
             seen_calls.add(sig)
-            result = call_tool(c.function.name, args, task, heap, turn)
+            if manual and c.function.name == "forget":
+                done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
+                s["forgets"] += len(done)
+                result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
+            else:
+                result = call_tool(c.function.name, args, task, heap, turn)
             label = f"{c.function.name} {args.get('path', '')}".strip()
-            add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+            o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+            if manual:
+                o.msg["content"] = f"[msg {o.id}] {result}"
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "hints": hints, "budget": budget, "task_family": task["family"], "task_id": task["id"],
-           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer, "end": end, "error": error,
+           "trigger": trigger, "hints": hints, "pressure": pressure, "budget": budget, "task_family": task["family"], "task_id": task["id"],
+           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer and not (task.get("wrong") and task["wrong"] in answer), "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,
@@ -246,8 +236,10 @@ def main():
     p.add_argument("--triggers", default="threshold:0.7", help="comma list of every_turn / threshold:P")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--positions", default="0.5")
+    p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
+    p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
     p.add_argument("--max-turns", type=int, default=80)
@@ -256,24 +248,24 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(".env")
-    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
-        cells = itertools.product(a.upfront.split(","), map(float, a.positions.split(",")),
+        cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  [h == "true" for h in a.hints.split(",")])
-        for upfront, pos, seed, trigger, strategy, hints in cells:
-            task = needle_task(seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, hints, a.budget, task["id"]) in done:
+                                  [h == "true" for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure in cells:
+            task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
+            if (model, strategy, trigger, hints, pressure, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break
