@@ -122,6 +122,14 @@ def test_run_row_records_hints_setting():
     assert row["hints"] is True
 
 
+def test_run_row_records_tag():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+
+    row, _ = agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, FakeAgent(), max_turns=200, tag="sweep2")
+
+    assert row["tag"] == "sweep2"
+
+
 def test_oracle_answers_with_zero_recalls_under_a_small_budget():
     row = run("oracle", budget=4000)
 
