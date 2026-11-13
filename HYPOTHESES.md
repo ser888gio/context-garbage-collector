@@ -15,12 +15,15 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H7 | Collecting every turn costs fewer tokens but breaks the cache more than threshold collection. | `every_turn` vs `threshold:0.7`: input and cached tokens, plus `stable_prefix_share` and `cache_breaks`. | open |
 | H8 | Simple LRU masking is as good as the smarter collectors (as in "The Complexity Trap"). | lru_mask vs mark_sweep/generational: success and tokens. | open |
 | H9 | GC can make the agent thrash: recall, re-collect, recall again. | repeated recalls of the same id in traces. | open |
+| H10 | The oracle sets the upper bound; real collectors reach X% of its success at Y% of its tokens. | `oracle` vs each strategy: success and input_tokens; `audit.py` for what each lost. | open |
 
 ## Roadmap
 
 Done:
 - Collectors: none, truncate, lru_mask, refcount, mark_sweep, generational
+- Oracle collector (upper bound) and `audit.py` (needle collected / recalled / wasted recalls per run)
 - Needle task, agent loop, resumable sweep CLI, offline tests
+- `timeline.py`: per-run GC log plot (message x turn grid, context size panel)
 - `report.py`: results table and success-vs-tokens plot
 
 Next:

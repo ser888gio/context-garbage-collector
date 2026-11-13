@@ -210,3 +210,13 @@ def test_hint_stub_has_no_keys_part_when_content_has_no_keys():
     C.kill(o, hints=True)
 
     assert o.msg["content"] == "[collected: msg 12 read_file; call recall(12) to restore]"
+
+
+def test_oracle_keeps_the_message_with_the_key_and_collects_an_unrelated_old_one():
+    heap = [sys_msg(), user(1, "go"), result(2, "a.txt", "code is 4242 here", 1),
+            result(3, "b.txt", "nothing relevant " * 20, 1), says(4, "ok", 5)]
+
+    out = C.oracle(heap, {"oracle_keys": {"4242"}})
+
+    assert out == [3]
+    assert heap[2].msg["content"] == "code is 4242 here"
