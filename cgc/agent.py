@@ -81,6 +81,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     add({"role": "system", "content": SYSTEM}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
+    if trigger.count(":") == 2:
+        st["target"] = float(trigger.split(":")[2])
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
              recalls=0, forgets=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
 
@@ -233,12 +235,12 @@ def main():
     p = argparse.ArgumentParser(description="Sweep GC strategies over needle tasks. Resumable: finished cells are skipped.")
     p.add_argument("--models", default="openrouter/nvidia/nemotron-3.5-lightning:free")
     p.add_argument("--strategies", default=",".join(C.STRATEGIES))
-    p.add_argument("--triggers", default="threshold:0.7", help="comma list of every_turn / threshold:P")
+    p.add_argument("--triggers", default="threshold:0.7", help="comma list of every_turn / threshold:P / threshold:P:T (collect down to T*budget)")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--positions", default="0.5")
     p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
-    p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
+    p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers: what collected stubs carry (false=none, true=keys)")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
@@ -249,16 +251,16 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {(r["model"], r["strategy"], r["trigger"], C.stub_mode(r.get("hints", False)), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  [h == "true" for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
+                                  [{"true": True, "false": False}.get(h, h) for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
         for family, upfront, pos, seed, trigger, strategy, hints, pressure in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, hints, pressure, a.budget, task["id"]) in done:
+            if (model, strategy, trigger, C.stub_mode(hints), pressure, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())
             if is_paid(model) and spent >= a.max_cost:
