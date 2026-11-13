@@ -2,5 +2,7 @@
 __pycache__/
 .venv/
 results/traces/
+results/
+.claude/
 .pytest_cache/
 .hypothesis/

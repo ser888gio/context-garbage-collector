@@ -23,6 +23,7 @@ Done:
 - Collectors: none, truncate, lru_mask, refcount, mark_sweep, generational
 - Oracle collector (upper bound) and `audit.py` (needle collected / recalled / wasted recalls per run)
 - Needle task, agent loop, resumable sweep CLI, offline tests
+- `timeline.py`: per-run GC log plot (message x turn grid, context size panel)
 - `report.py`: results table and success-vs-tokens plot
 
 Next:
