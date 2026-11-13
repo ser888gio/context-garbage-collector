@@ -9,7 +9,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H1 | Without GC the agent fails once context exceeds the budget. | `none` ends with `oom` on 30-file needle tasks. | open |
 | H2 | Any GC beats no GC on long tasks. | success rate of each strategy vs `none`. | open |
 | H3 | Mark-sweep keeps the needle when the question is in the task, and loses it when the question comes late. | `upfront=true` vs `false`: success and recalls. | open |
-| H4 | When the GC drops something needed, models use `recall` to get it back. | recalls > 0 on runs that still succeed. | open |
+| H4 | When the GC drops something needed, models use `recall` to get it back. | recalls > 0 on runs that still succeed. | supported (Groq, hints on) |
 | H5 | Refcount keeps more garbage than mark-sweep (it leaks cycles). | tokens_freed and max_est_tokens: refcount vs mark_sweep. | open |
 | H6 | Generational GC keeps a stable prefix, so it gets more cache hits. | cached_input_tokens / input_tokens per strategy; provider-independent: `stable_prefix_share` and `cache_breaks`. | open |
 | H7 | Collecting every turn costs fewer tokens but breaks the cache more than threshold collection. | `every_turn` vs `threshold:0.7`: input and cached tokens, plus `stable_prefix_share` and `cache_breaks`. | open |
@@ -22,6 +22,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | open |
 | H15 | The production baseline (mask + summary) is as good as any GC strategy. | `hybrid` and `mask` vs every other strategy: success, tokens, cost incl. `summary_calls`. | open |
 | H16 | Mark-sweep leaks fewer tokens than refcount (excess over oracle). | `excess_tokens` per strategy: mark_sweep vs refcount. | open |
+| H17 | Stub hints (keys of the collected message) are needed for recall to work. | `hints=true` vs `false`: success and recalls per collector. | supported (Groq, n=3) |
 
 ## Roadmap
 
