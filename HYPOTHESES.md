@@ -20,6 +20,8 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H12 | A write barrier removes stale facts and fixes poisoning. | `--family poison`: success of write_barrier vs mark_sweep. | open |
 | H13 | A model managing its own memory (manual forget) does worse than a 20-line algorithm. | `manual` vs `mark_sweep`/`lru_mask`: success, oom rate, `forgets`. | open |
 | H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | open |
+| H15 | The production baseline (mask + summary) is as good as any GC strategy. | `hybrid` and `mask` vs every other strategy: success, tokens, cost incl. `summary_calls`. | open |
+| H16 | Mark-sweep leaks fewer tokens than refcount (excess over oracle). | `excess_tokens` per strategy: mark_sweep vs refcount. | open |
 
 ## Roadmap
 

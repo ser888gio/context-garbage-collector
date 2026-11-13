@@ -222,6 +222,54 @@ def test_oracle_keeps_the_message_with_the_key_and_collects_an_unrelated_old_one
     assert heap[2].msg["content"] == "code is 4242 here"
 
 
+def aged_heap():
+    return [sys_msg(), user(1, "Read files."),
+            reads(2, "a.txt", 1), result(3, "a.txt", "x" * 400, 1),
+            reads(4, "b.txt", 2), result(5, "b.txt", "y" * 400, 2),
+            reads(6, "c.txt", 4), result(7, "c.txt", "z" * 400, 4)]
+
+
+def test_mask_stubs_only_tool_results_older_than_mask_turns():
+    heap = aged_heap()
+
+    C.mask(heap, {"budget": 100, "mask_turns": 3})
+
+    assert [o.dead for o in heap[2:]] == [False, True, False, False, False, False]
+
+
+def test_hybrid_summarizes_what_mask_left_into_the_oldest_message_and_keeps_structure():
+    heap = aged_heap()
+
+    C.hybrid(heap, {"budget": 100, "mask_turns": 10, "summarize": lambda parts: "SUM"})
+
+    assert heap[2].msg["content"] == "[summary of msgs 2-5] SUM"
+    assert [c["id"] for c in heap[2].msg["tool_calls"]] == ["c2"]
+    assert [o.dead for o in heap[2:]] == [False, True, True, True, False, False]
+    assert heap[3].msg["tool_call_id"] == "c2"
+
+
+def test_hybrid_does_not_summarize_its_own_summary_again():
+    heap = aged_heap()
+    calls = []
+
+    def summarize(parts):
+        calls.append(parts)
+        return "SUM"
+
+    C.hybrid(heap, {"budget": 100, "mask_turns": 10, "summarize": summarize})
+    C.hybrid(heap, {"budget": 100, "mask_turns": 10, "summarize": summarize})
+
+    assert len(calls) == 1
+
+
+def test_hybrid_without_summarize_only_masks():
+    heap = aged_heap()
+
+    C.hybrid(heap, {"budget": 100, "mask_turns": 3})
+
+    assert [o.dead for o in heap[2:]] == [False, True, False, False, False, False]
+
+
 def test_forget_kills_an_old_message_and_refuses_a_root():
     heap = [sys_msg(), user(1, "Read files."), reads(2, "a.txt", 1),
             result(3, "a.txt", "old text " * 50, 1), reads(4, "b.txt", 2), result(5, "b.txt", "fresh", 2)]

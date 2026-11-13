@@ -215,6 +215,21 @@ def test_call_to_a_tool_not_in_the_request_is_counted_and_the_run_continues():
     assert (row["unknown_tool_calls"], row["end"], row["success"]) == (1, "answered", True)
 
 
+class Summarizing(FakeAgent):
+    def __call__(self, messages, tools):
+        if not tools:
+            return self.reply("SUM", messages=messages)
+        return super().__call__(messages, tools)
+
+
+def test_hybrid_run_records_the_summary_calls_it_made():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+
+    row, _ = agent.run(task, "fake/model", "hybrid", "threshold:0.7", 4000, Summarizing(), max_turns=200)
+
+    assert row["summary_calls"] == 3
+
+
 class Hoarder(FakeAgent):
     """Reads everything and never forgets; strips the [msg N] prefix manual mode adds."""
 

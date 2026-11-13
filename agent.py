@@ -14,6 +14,8 @@ RUNS = RESULTS / "runs.jsonl"
 
 SYSTEM = ("You are a careful agent working with tools. To save space, older messages may be replaced by "
           "'[collected: msg N ...]' stubs. If you need what a stub held, call recall with its id.")
+SUMMARY_SYSTEM = ("Summarize the conversation excerpt below for an agent that will continue the task. "
+                  "Keep every name, number and file path; drop everything else.")
 TOOLS = [
     {"type": "function", "function": {"name": "list_files", "description": "List all note files.",
                                       "parameters": {"type": "object", "properties": {}}}},
@@ -80,7 +82,18 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, forgets=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, forgets=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+
+    def summarize(parts):
+        resp = complete([{"role": "system", "content": SUMMARY_SYSTEM},
+                         {"role": "user", "content": "\n\n".join(parts)}], [])
+        s["summary_calls"] += 1
+        s["input_tokens"] += resp.usage.prompt_tokens
+        s["output_tokens"] += resp.usage.completion_tokens
+        s["cost_usd"] += cost_of(resp)
+        return resp.choices[0].message.content or ""
+
+    st["summarize"] = summarize
     if strategy == "oracle":
         st["oracle_keys"] = {task["answer"]}
     prev, shares, cache_breaks = [], [], 0
@@ -186,7 +199,7 @@ def litellm_complete(model):
     def complete(messages, tools):
         for i in range(7):
             try:
-                return litellm.completion(model=model, messages=messages, tools=tools, temperature=0, timeout=300)
+                return litellm.completion(model=model, messages=messages, tools=tools or None, temperature=0, timeout=300)
             except retryable as e:
                 wait = min(30 * 2 ** i, 600)
                 print(f"  {type(e).__name__} on {model}, retry in {wait}s", flush=True)
