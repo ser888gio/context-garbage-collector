@@ -3,8 +3,8 @@ import json
 import pytest
 from hypothesis import given, settings, strategies as hs
 
-import collectors as C
-from collectors import Obj
+from cgc import collectors as C
+from cgc.collectors import Obj
 
 
 def sys_msg(i=0, content="You are an agent."):

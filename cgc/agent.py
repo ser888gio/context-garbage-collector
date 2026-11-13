@@ -6,8 +6,8 @@ import time
 import uuid
 from pathlib import Path
 
-import collectors as C
-from tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
+from cgc import collectors as C
+from cgc.tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
 
 RESULTS = Path("results")
 RUNS = RESULTS / "runs.jsonl"
@@ -71,7 +71,7 @@ def pressure_note(heap, budget):
                                        f"{sum(o.dead for o in heap)} messages collected."}
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False):
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag=""):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
@@ -180,7 +180,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
                 o.msg["content"] = f"[msg {o.id}] {result}"
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "hints": hints, "pressure": pressure, "budget": budget, "task_family": task["family"], "task_id": task["id"],
+           "trigger": trigger, "hints": hints, "pressure": pressure, "tag": tag, "budget": budget, "task_family": task["family"], "task_id": task["id"],
            "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer and not (task.get("wrong") and task["wrong"] in answer), "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
@@ -240,6 +240,7 @@ def main():
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of true/false: keys listed in collected stubs")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
+    p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
     p.add_argument("--max-turns", type=int, default=80)
@@ -247,7 +248,7 @@ def main():
     a = p.parse_args()
 
     from dotenv import load_dotenv
-    load_dotenv(".env")
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     done = {(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
@@ -265,7 +266,7 @@ def main():
                 break
             print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break

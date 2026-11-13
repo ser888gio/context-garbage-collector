@@ -1,6 +1,6 @@
 import json
 
-import report
+from analysis import report
 
 ROWS = [
     dict(model="m/a", strategy="mark_sweep", trigger="every_turn", success=True, end="answered", turns=10, task_id="t1", hints=False,

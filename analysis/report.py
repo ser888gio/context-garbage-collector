@@ -9,14 +9,26 @@ import matplotlib.pyplot as plt
 KEYS = ["model", "strategy", "trigger"]
 
 
-def table(path):
+def load(path):
     df = pd.read_json(path, lines=True)
+    for col, default in {"hints": False, "pressure": False, "tag": "", "error": "", "cache_breaks": float("nan"),
+                         "stable_prefix_share": float("nan"), "max_est_tokens": float("nan"),
+                         "max_context_tokens": float("nan"), "recalls": float("nan"), "cost_usd": 0.0}.items():
+        if col not in df:
+            df[col] = default
+    df[["hints", "pressure"]] = df[["hints", "pressure"]].fillna(False).astype(bool)
+    df["tag"] = df.tag.fillna("")
     df["cached_share"] = df.cached_input_tokens / df.input_tokens
     df["oom"] = df.end == "oom"
     oracle = df[df.strategy == "oracle"].assign(ppt=lambda d: d.input_tokens / d.turns)
     ref = oracle.groupby(["model", "task_id", "hints"]).ppt.mean().rename("oracle_ppt")
     df = df.join(ref, on=["model", "task_id", "hints"])
     df["excess_tokens"] = df.input_tokens / df.turns - df.oracle_ppt
+    return df
+
+
+def table(path):
+    df = load(path)
     return df.groupby(KEYS).agg(
         runs=("success", "size"), success_rate=("success", "mean"), oom=("oom", "sum"),
         input_tokens=("input_tokens", "mean"), cached_share=("cached_share", "mean"),

@@ -1,6 +1,6 @@
 import json
 
-import audit
+from analysis import audit
 
 
 def msg(i, role, content=None, saved=None, calls=None):

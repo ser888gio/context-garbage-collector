@@ -4,8 +4,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-import agent
-import tasks
+from cgc import agent
+from cgc import tasks
 
 
 class FakeAgent:
@@ -120,6 +120,14 @@ def test_run_row_records_hints_setting():
     row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, FakeAgent(), max_turns=200, hints=True)
 
     assert row["hints"] is True
+
+
+def test_run_row_records_tag():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+
+    row, _ = agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, FakeAgent(), max_turns=200, tag="sweep2")
+
+    assert row["tag"] == "sweep2"
 
 
 def test_oracle_answers_with_zero_recalls_under_a_small_budget():
@@ -283,7 +291,7 @@ def test_manual_model_that_never_forgets_runs_out_of_memory():
 
 
 def test_pressure_note_reports_usage_and_collected_count_of_a_small_heap():
-    import collectors as C
+    from cgc import collectors as C
     heap = [C.Obj(0, {"role": "user", "content": "x" * 400}, 0, root=True),
             C.Obj(1, {"role": "tool", "content": "y"}, 0, dead=True)]
 
