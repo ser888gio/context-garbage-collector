@@ -387,3 +387,37 @@ def test_h2o_keeps_sinks_recent_turns_and_the_most_referenced_result():
     out = C.h2o(heap, {"budget": 100, "h2o_heavy": 1})
 
     assert out == [4, 5, 6, 8, 9, 10, 11]
+
+
+def chain_heap():
+    files = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]
+    heap = [sys_msg(), user(1, "Find the code for ORION."),
+            reads(2, "list", 1),
+            Obj(3, {"role": "tool", "tool_call_id": "c2", "content": "\n".join(files)}, 1,
+                label="list_files", touched=1, last_used=1)]
+    bodies = {"a.txt": "filler one", "b.txt": "ORION is the same as the code for project VEGA",
+              "c.txt": "project VEGA is 7468", "d.txt": "filler two", "e.txt": "filler three"}
+    for n, f in enumerate(files):
+        heap += [reads(4 + 2 * n, f, 2 + n), result(5 + 2 * n, f, bodies[f], 2 + n)]
+    heap += [says(14, "Checking.", 8), reads(15, "z.txt", 8), result(16, "z.txt", "latest", 8)]
+    return heap
+
+
+def dead_ids(heap):
+    return [o.id for o in heap if o.dead]
+
+
+def test_mark_sweep_collects_the_value_file_behind_a_link_file():
+    heap = chain_heap()
+
+    C.mark_sweep(heap, {"budget": 100})
+
+    assert dead_ids(heap) == [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13]
+
+
+def test_mark_sweep_chain_keeps_the_value_file_and_still_collects_the_filler_files():
+    heap = chain_heap()
+
+    C.mark_sweep_chain(heap, {"budget": 100})
+
+    assert dead_ids(heap) == [2, 4, 5, 10, 11, 12, 13]
