@@ -62,6 +62,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 | `mark_sweep_chain` | Mark-sweep, but a reached tool result with at most 3 keys (`chain_max_refs`) also propagates, so link file -> value file chains survive. A `list_files` result has too many keys and stays a leaf. |
 | `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
+| `semantic` | Keep roots, the newest turn and the top-4 (`semantic_k`) collectable messages by embedding cosine similarity to the root texts; collect the rest. Needs `GEMINI_API_KEY` for embeddings (`gemini/gemini-embedding-001`); not in the default `--strategies`. |
 | `h2o` | Heavy-hitter retention (from H2O): pin the first 2 messages (sinks) and the newest 2 turns, keep the 4 tool results most referenced by other messages, collect the rest. Tunable with `h2o_sink`, `h2o_recent`, `h2o_heavy`. |
 | `manual` | Collects nothing automatically. The model gets a `forget(ids)` tool (tool results show `[msg N]`), always sees the memory-pressure note, and runs out of memory if it never forgets. |
 | `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
@@ -89,7 +90,7 @@ python -m cgc.agent --models openrouter/nvidia/nemotron-3.5-lightning:free \
 python -m analysis.report
 ```
 
-`--family needle,multihop,poison` picks the task family (default `needle`).
+`--family needle,multihop,poison,paraphrase` picks the task family (default `needle`). `paraphrase` names the target only by a plain-word description ("the northern mountain observatory project"), so regex keys from the question find nothing.
 
 `--hints` sets what a collected stub carries: `false`/`none` (nothing), `true`/`keys` (keys of the collected message), `preview` (keys + first 12 words), `numbers` (keys + every 4+ digit number). `--triggers threshold:P:T` collects when context exceeds P of the budget and then down to T of it (hysteresis, e.g. `threshold:0.7:0.4`); `threshold:P` is unchanged. For `mark_sweep`, `refcount`, `generational` and `write_barrier`, hysteresis also collects the oldest reachable tool results until the target is met.
 
@@ -116,7 +117,7 @@ Inspect runs:
 One row per run in `results/runs.jsonl`:
 - identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `summary_calls`, `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `summary_calls`, `embed_calls` (calls to the embedding function, `semantic` only), `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
 - size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
 - leak (computed by `analysis.report`, not stored): `excess_tokens`, mean prompt tokens per turn minus the oracle run's for the same model, task and hints
 - cache behavior: `stable_prefix_share`, `cache_breaks`

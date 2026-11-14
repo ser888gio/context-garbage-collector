@@ -22,8 +22,8 @@ def build(rng, n_files, words_per_file, facts):
     return files
 
 
-def task(family, seed, n_files, position, upfront, files, answer, name="ORION", **extra):
-    question = f"What is the access code for project {name}? Reply with just the number."
+def task(family, seed, n_files, position, upfront, files, answer, name="ORION", question=None, **extra):
+    question = question or f"What is the access code for project {name}? Reply with just the number."
     then = f"Then answer: {question}" if upfront else "When you have read all of them, reply with exactly DONE."
     return {
         "family": family,
@@ -75,4 +75,22 @@ def poison_task(seed, n_files=30, words_per_file=450, position=0.2, upfront=Fals
     return task("poison", seed, n_files, position, upfront, files, str(new), wrong=str(old))
 
 
-BUILDERS = {"needle": needle_task, "multihop": multihop_task, "poison": poison_task}
+DESCRIPTIONS = ["northern mountain observatory", "southern coastal lighthouse", "eastern river dam",
+                "western desert telescope", "central forest ranger post", "island weather station",
+                "highland radio relay", "harbor customs depot"]
+
+
+def paraphrase_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=False):
+    rng = random.Random(seed)
+    names = rng.sample(NAMES, 4)
+    descs = rng.sample(DESCRIPTIONS, 4)
+    codes = rng.sample(range(1000, 10000), 4)
+    needle_at = min(n_files - 1, int(position * n_files))
+    fact_files = [needle_at] + rng.sample([i for i in range(n_files) if i != needle_at], 3)
+    facts = {f: f"Project {names[j]} is the {descs[j]}. " + FACT.format(names[j], codes[j]) for j, f in enumerate(fact_files)}
+    files = build(rng, n_files, words_per_file, facts)
+    question = f"What is the access code for the {descs[0]} project? Reply with just the number."
+    return task("paraphrase", seed, n_files, position, upfront, files, str(codes[0]), names[0], question=question)
+
+
+BUILDERS = {"paraphrase": paraphrase_task, "needle": needle_task, "multihop": multihop_task, "poison": poison_task}

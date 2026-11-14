@@ -28,6 +28,8 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H20 | Heavy-hitter retention (h2o) matches mark-sweep without a reference graph walk. | `h2o` vs `mark_sweep` on needle and multihop: success, recalls, tokens. | leaning supported on needle (sweep3, n=3: 3/3 but ~35% more tokens than mark_sweep); multihop untested |
 | H21 | Collectors trade cost for accuracy: retained tokens predict success on multihop/poison. | `analysis.tradeoff`: mean input tokens vs success per strategy and family. | leaning supported (n=10) |
 | H22 | Following chains through rare keys (mark_sweep_chain) recovers multihop success at mark-sweep's cost. | `--family multihop`: success, recalls, tokens of mark_sweep_chain vs mark_sweep/lru_mask. | open |
+| H23 | On paraphrase tasks semantic relevance beats regex reachability (mark_sweep). | `--family paraphrase`: success, recalls of `semantic` vs `mark_sweep`. | open |
+| H24 | Semantic selection changes between calls and breaks the prompt cache more often than mark_sweep. | `cache_breaks`, `stable_prefix_share` of `semantic` vs `mark_sweep`. | open |
 
 ## Roadmap
 
@@ -40,6 +42,7 @@ Done:
 - Task families: multihop (answer needs two files) and poisoning (wrong fact corrected later); `write_barrier` strategy
 - Built, not yet run: stub modes (`--hints none,keys,preview,numbers`), hysteresis trigger (`threshold:P:T`), `h2o` collector (H18-H20). LLM-gloss stub mode is future work.
 - Built, not yet run: `mark_sweep_chain` (tool results with at most 3 keys propagate reachability; H22). Rerun multihop with it.
+- Built, not yet run: `semantic` collector (embedding top-K, H23-H24) and the `paraphrase` task family.
 
 Next:
 1. First sweep on free models; write findings to `JOURNAL.md`.
