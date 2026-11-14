@@ -2,6 +2,7 @@ import argparse
 import copy
 import itertools
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -36,6 +37,14 @@ FORGET_TOOL = {"type": "function", "function": {
 
 class RateLimited(Exception):
     pass
+
+
+QUOTA_HINT = re.compile(r"429|RESOURCE_EXHAUSTED|quota|rate.?limit", re.I)
+
+
+def error_text(e):
+    # Gemini error messages embed the request URL, including the API key.
+    return re.sub(r"key=[^&\s'\"]+", "key=REDACTED", f"{type(e).__name__}: {e}")[:300]
 
 
 def cost_of(resp):
@@ -118,7 +127,13 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     for turn in range(1, max_turns + 1):
         before = C.size(heap)
         if trigger == "every_turn" or before > budget * st["threshold"]:
-            freed = C.STRATEGIES[strategy](heap, st)
+            try:
+                freed = C.STRATEGIES[strategy](heap, st)
+            except RateLimited:
+                raise
+            except Exception as e:
+                error, end = error_text(e), "api_error"
+                break
             s["gc_runs"] += 1
             s["tokens_freed"] += before - C.size(heap)
             events.append({"turn": turn, "before": before, "after": C.size(heap), "collected": freed})
@@ -140,7 +155,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         except RateLimited:
             raise
         except Exception as e:
-            error, end = f"{type(e).__name__}: {e}"[:300], "api_error"
+            error, end = error_text(e), "api_error"
             break
         u = resp.usage
         s["input_tokens"] += u.prompt_tokens
@@ -201,7 +216,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     return row, trace
 
 
-def with_retry(call, label):
+def with_retry(call, label, sleep=time.sleep):
     import litellm
     litellm.suppress_debug_info = True
     retryable = (litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.InternalServerError,
@@ -209,10 +224,12 @@ def with_retry(call, label):
     for i in range(7):
         try:
             return call()
-        except retryable as e:
+        except Exception as e:
+            if not (isinstance(e, retryable) or QUOTA_HINT.search(str(e))):
+                raise
             wait = min(30 * 2 ** i, 600)
             print(f"  {type(e).__name__} on {label}, retry in {wait}s", flush=True)
-            time.sleep(wait)
+            sleep(wait)
     raise RateLimited(label)
 
 
@@ -230,8 +247,9 @@ def litellm_embed(model):
 
     def embed(texts):
         out = []
-        for i in range(0, len(texts), 50):
-            batch = texts[i:i + 50]
+        # Gemini free tier allows 100 embedded texts/min and each text counts as a request.
+        for i in range(0, len(texts), 20):
+            batch = texts[i:i + 20]
             resp = with_retry(lambda: litellm.embedding(model=model, input=batch, timeout=300), model)
             out += [d["embedding"] for d in resp.data]
         return out
