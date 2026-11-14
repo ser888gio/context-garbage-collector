@@ -27,6 +27,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H19 | Hysteresis (collect to 40%) cuts cache breaks at equal success. | `threshold:0.7:0.4` vs `threshold:0.7`: `cache_breaks`, success. | no effect seen (sweep3, n=3) |
 | H20 | Heavy-hitter retention (h2o) matches mark-sweep without a reference graph walk. | `h2o` vs `mark_sweep` on needle and multihop: success, recalls, tokens. | leaning supported on needle (sweep3, n=3: 3/3 but ~35% more tokens than mark_sweep); multihop untested |
 | H21 | Collectors trade cost for accuracy: retained tokens predict success on multihop/poison. | `analysis.tradeoff`: mean input tokens vs success per strategy and family. | leaning supported (n=10) |
+| H22 | Following chains through rare keys (mark_sweep_chain) recovers multihop success at mark-sweep's cost. | `--family multihop`: success, recalls, tokens of mark_sweep_chain vs mark_sweep/lru_mask. | open |
 
 ## Roadmap
 
@@ -38,9 +39,9 @@ Done:
 - `analysis/report.py`: results table and success-vs-tokens plot
 - Task families: multihop (answer needs two files) and poisoning (wrong fact corrected later); `write_barrier` strategy
 - Built, not yet run: stub modes (`--hints none,keys,preview,numbers`), hysteresis trigger (`threshold:P:T`), `h2o` collector (H18-H20). LLM-gloss stub mode is future work.
+- Built, not yet run: `mark_sweep_chain` (tool results with at most 3 keys propagate reachability; H22). Rerun multihop with it.
 
 Next:
-0. Fix the chain cut: let tool results act as referencers only for keys that also appear in a root, then rerun multihop with an upfront question.
 1. First sweep on free models; write findings to `JOURNAL.md`.
 2. More task families: long chat, research.
 3. Vary needle position (lost-in-the-middle) and budget.
@@ -51,5 +52,5 @@ Next:
 
 - References are found by regex (paths, CAPS names, numbers). Plain-word links are missed.
 - Token sizes are estimated as chars/4, the same for every model.
-- Tool results are not referencers, so a link file ("ORION is the same as VEGA") cannot keep the value file alive; only roots, user and assistant messages propagate reachability. Multihop chains are cut after the link (sweep 3 investigation: not the cause of the observed failures).
+- Tool results are not referencers, so a link file ("ORION is the same as VEGA") cannot keep the value file alive; only roots, user and assistant messages propagate reachability. Multihop chains are cut after the link (sweep 3 investigation: not the cause of the observed failures). `mark_sweep_chain` follows them through small tool results; untested on real models.
 - Free models are rate-limited; sweeps run slowly and resume where they stopped.

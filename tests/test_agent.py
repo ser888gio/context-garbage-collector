@@ -391,3 +391,15 @@ def test_h2o_run_succeeds_by_recalling_what_it_collected():
     row = run_row("h2o", "threshold:0.7")
 
     assert (row["success"], row["cache_breaks"], row["recalls"]) == (True, 13, 6)
+
+
+def test_mark_sweep_chain_answers_multihop_with_zero_recalls_when_the_question_is_in_the_task():
+    row = run_hop("mark_sweep_chain", budget=4000, upfront=True)
+
+    assert (row["end"], row["success"], row["recalls"], row["tokens_freed"]) == ("answered", True, 0, 6200)
+
+
+def test_mark_sweep_chain_recalls_ten_times_on_multihop_when_the_question_comes_late():
+    row = run_hop("mark_sweep_chain", budget=4000, upfront=False)
+
+    assert (row["end"], row["success"], row["recalls"], row["tokens_freed"]) == ("answered", True, 10, 13972)
