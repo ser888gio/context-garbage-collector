@@ -35,7 +35,7 @@ def points(path):
 
 
 def plot(pts, out):
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4.5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4.5), sharex=True, sharey=True)
     for ax, fam in zip(axes, FAMILIES):
         p = pts[pts.family == fam]
         for _, r in p[p.strategy.isin(REFS)].iterrows():
