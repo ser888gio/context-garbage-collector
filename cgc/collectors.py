@@ -73,7 +73,7 @@ def collectable(heap):
 
 NUM_RE = re.compile(r"\b\d{4,}\b")
 MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
-         "preview": "preview", "numbers": "numbers", "fresh": "fresh"}
+         "preview": "preview", "numbers": "numbers", "fresh": "fresh", "pointer": "pointer"}
 
 
 def stub_mode(hints):
@@ -341,26 +341,35 @@ for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "gener
 STRATEGIES["manual"] = none
 
 
-def refresh_stubs(heap):
+def refresh_stubs(heap, pointers=False):
     # Runs over all dead stubs each pass: a correction usually arrives after the old file was collected.
     # Global, not per message: the correction's own stub also lists the revoked number it mentions.
-    latest, seen = {}, {}
+    latest, latest_id, seen = {}, {}, {}
     for o in sorted(heap, key=lambda o: o.id):
         for k, v in facts(o).items():
-            latest[k] = v
+            latest[k], latest_id[k] = v, o.id
             seen.setdefault(k, set()).add(v)
     gone = {v for k, vs in seen.items() for v in vs if v != latest[k]}
     for o in heap:
         if not (o.dead and o.saved):
             continue
-        m = re.search(r" — keys: (.*?)(?=; call)", o.msg["content"])
-        if gone and m:
-            kept = [k for k in m.group(1).split(", ") if k not in gone]
-            o.msg["content"] = o.msg["content"].replace(m.group(0), f" — keys: {', '.join(kept)}" if kept else "", 1)
+        stale = {k: latest_id[k] for k, v in facts(o).items() if v != latest[k]} if pointers else {}
+        if not (gone or stale):
+            continue
+        m = re.search(r"( — keys: (.*?))?(?=; call recall\()", o.msg["content"])
+        if not m:
+            continue
+        # Strip old pointers first so reruns stay idempotent and follow newer corrections.
+        items = [re.sub(r" \(superseded by msg \d+\)$", "", k) for k in (m.group(2) or "").split(", ") if k]
+        items = [k for k in items if k not in gone]
+        for k, n in stale.items():
+            note = f"{k} (superseded by msg {n})"
+            items = [note if i == k else i for i in items] if k in items else items + [note]
+        o.msg["content"] = o.msg["content"].replace(m.group(0), f" — keys: {', '.join(items)}" if items else "", 1)
 
 
 def collect(strategy, heap, st):
     freed = STRATEGIES[strategy](heap, st)
-    if st.get("hints") == "fresh":
-        refresh_stubs(heap)
+    if st.get("hints") in ("fresh", "pointer"):
+        refresh_stubs(heap, pointers=st["hints"] == "pointer")
     return freed
