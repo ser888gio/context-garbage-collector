@@ -59,6 +59,7 @@ Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call rec
 | `hybrid` | `mask`; if still over the threshold, summarize all remaining collectable messages with one LLM call. |
 | `refcount` | Stub objects with no incoming references from live objects. |
 | `mark_sweep` | Stub objects unreachable from the roots. |
+| `mark_sweep_chain` | Mark-sweep, but a reached tool result with at most 3 keys (`chain_max_refs`) also propagates, so link file -> value file chains survive. A `list_files` result has too many keys and stays a leaf. |
 | `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
 | `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
 | `h2o` | Heavy-hitter retention (from H2O): pin the first 2 messages (sinks) and the newest 2 turns, keep the 4 tool results most referenced by other messages, collect the rest. Tunable with `h2o_sink`, `h2o_recent`, `h2o_heavy`. |

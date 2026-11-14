@@ -106,7 +106,7 @@ def restore(heap, obj_id, t):
     return True
 
 
-def reachable(heap, extra_roots=()):
+def reachable(heap, extra_roots=(), chain_max_keys=None):
     t = now(heap)
     live = [o for o in heap if o.live]
     k = {o.id: keys(o) for o in live}
@@ -114,7 +114,7 @@ def reachable(heap, extra_roots=()):
     stack = [o for o in live if o.id in seen]
     while stack:
         src = stack.pop()
-        if not src.is_referencer:
+        if not (src.is_referencer or (chain_max_keys is not None and len(k[src.id]) <= chain_max_keys)):
             continue
         for o in live:
             if o.id not in seen and k[src.id] & k[o.id]:
@@ -196,6 +196,17 @@ def refcount(heap, st):
 
 def mark_sweep(heap, st):
     seen = reachable(heap)
+    out = [o for o in collectable(heap) if o.id not in seen]
+    for o in out:
+        kill(o, st.get("hints", False))
+    return [o.id for o in out]
+
+
+def mark_sweep_chain(heap, st):
+    # A reached tool result also propagates, but only if it has at most chain_max_refs keys. A link or value
+    # file carries ~3 (name, name, path); a list_files result carries one path per file, so it stays a leaf.
+    # A per-key fanout guard cannot do this: every path appears in exactly 3 messages (listing, call, result).
+    seen = reachable(heap, chain_max_keys=st.get("chain_max_refs", 3))
     out = [o for o in collectable(heap) if o.id not in seen]
     for o in out:
         kill(o, st.get("hints", False))
@@ -298,8 +309,8 @@ def with_target(fn):
     return wrapped
 
 
-STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, refcount, mark_sweep, write_barrier,
+STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, refcount, mark_sweep, mark_sweep_chain, write_barrier,
                                              generational, h2o, oracle)}
-for _n in ("refcount", "mark_sweep", "write_barrier", "generational"):
+for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "generational"):
     STRATEGIES[_n] = with_target(STRATEGIES[_n])
 STRATEGIES["manual"] = none
