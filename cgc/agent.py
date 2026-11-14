@@ -128,7 +128,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         before = C.size(heap)
         if trigger == "every_turn" or before > budget * st["threshold"]:
             try:
-                freed = C.STRATEGIES[strategy](heap, st)
+                freed = C.collect(strategy, heap, st)
             except RateLimited:
                 raise
             except Exception as e:
@@ -286,7 +286,7 @@ def main():
     p.add_argument("--positions", default="0.5")
     p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison / paraphrase")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
-    p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers: what collected stubs carry (false=none, true=keys)")
+    p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers/fresh: what collected stubs carry (false=none, true=keys)")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)

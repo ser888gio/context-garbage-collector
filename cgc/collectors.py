@@ -73,7 +73,7 @@ def collectable(heap):
 
 NUM_RE = re.compile(r"\b\d{4,}\b")
 MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
-         "preview": "preview", "numbers": "numbers"}
+         "preview": "preview", "numbers": "numbers", "fresh": "fresh"}
 
 
 def stub_mode(hints):
@@ -221,7 +221,7 @@ def facts(o):
     # A clause (split on . ; newline) with one CAPS key asserts its LAST 4+ digit number. Splitting on ";"
     # keeps "ORION is now 7310; the old code 4821 is revoked" as ORION = 7310, not the revoked 4821.
     out = {}
-    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.msg.get("content") or ""):
+    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.saved or o.msg.get("content") or ""):
         caps, nums = set(CAPS_RE.findall(sentence)), NUM_RE.findall(sentence)
         if len(caps) == 1 and nums:
             out[caps.pop()] = nums[-1]
@@ -339,3 +339,23 @@ STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, re
 for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "generational", "semantic"):
     STRATEGIES[_n] = with_target(STRATEGIES[_n])
 STRATEGIES["manual"] = none
+
+
+def refresh_stubs(heap):
+    # Runs over all dead stubs each pass: a correction usually arrives after the old file was collected.
+    f = {o.id: facts(o) for o in heap}
+    for o in heap:
+        if not (o.dead and o.saved):
+            continue
+        gone = {v for k, v in f[o.id].items() if any(f[p.id].get(k, v) != v for p in heap if p.id > o.id)}
+        m = re.search(r" — keys: (.*?)(?=; call)", o.msg["content"])
+        if gone and m:
+            kept = [k for k in m.group(1).split(", ") if k not in gone]
+            o.msg["content"] = o.msg["content"].replace(m.group(0), f" — keys: {', '.join(kept)}" if kept else "", 1)
+
+
+def collect(strategy, heap, st):
+    freed = STRATEGIES[strategy](heap, st)
+    if st.get("hints") == "fresh":
+        refresh_stubs(heap)
+    return freed

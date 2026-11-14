@@ -479,3 +479,57 @@ def test_semantic_reembeds_a_live_message_whose_text_changed():
 def test_semantic_without_embed_raises():
     with pytest.raises(ValueError, match="embed"):
         C.semantic(semantic_heap(), {"budget": 100})
+
+
+def orion_heap(correction_at_turn):
+    return [sys_msg(), user(1, "What is the code for ORION?"),
+            reads(2, "a.txt", 1), result(3, "a.txt", "The access code for project ORION is 4821. " + "filler words " * 10, 1),
+            reads(4, "b.txt", correction_at_turn),
+            result(5, "b.txt", "Correction: the access code for project ORION is now 7310; the old code 4821 is revoked.", correction_at_turn),
+            reads(6, "c.txt", 4), result(7, "c.txt", "latest", 4)]
+
+
+def test_fresh_hints_drop_the_superseded_number_but_keep_the_key():
+    heap = orion_heap(2)
+
+    C.collect("write_barrier", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "keys: ORION; call" in heap[3].msg["content"]
+
+
+def test_keys_hints_still_leak_the_superseded_number():
+    heap = orion_heap(2)
+
+    C.collect("write_barrier", heap, {"budget": 100, "hints": "keys"})
+
+    assert "4821" in heap[3].msg["content"]
+
+
+def test_fresh_hints_scrub_a_stub_collected_before_the_correction_arrived():
+    heap = orion_heap(2)
+    C.kill(heap[3], "fresh")
+    assert "4821" in heap[3].msg["content"]
+
+    C.collect("none", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "4821" not in heap[3].msg["content"]
+
+
+def test_fresh_hints_keep_a_number_nothing_contradicts():
+    heap = orion_heap(2)
+    heap[5].msg["content"] = "The access code for project VEGA is 7310."
+    C.kill(heap[3], "fresh")
+
+    C.collect("none", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "4821" in heap[3].msg["content"]
+
+
+def test_fresh_hints_see_a_correction_that_was_itself_collected():
+    heap = orion_heap(2)
+    C.kill(heap[3], "fresh")
+    C.kill(heap[5], "fresh")
+
+    C.collect("none", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "4821" not in heap[3].msg["content"]
