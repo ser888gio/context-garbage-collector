@@ -543,3 +543,68 @@ def test_fresh_hints_scrub_the_revoked_number_from_the_correction_stub():
 
     assert "7310" in heap[5].msg["content"]
     assert "4821" not in heap[5].msg["content"]
+
+
+def pointer_heap():
+    heap = orion_heap(2)
+    C.kill(heap[3], "pointer")
+    C.kill(heap[5], "pointer")
+    return heap
+
+
+def test_pointer_hints_name_the_correction_on_the_stale_message():
+    heap = pointer_heap()
+
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+
+    assert "keys: ORION (superseded by msg 5); call recall(3)" in heap[3].msg["content"]
+    assert "4821" not in heap[3].msg["content"]
+
+
+def test_pointer_hints_leave_the_correction_itself_unannotated():
+    heap = pointer_heap()
+
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+
+    assert "superseded" not in heap[5].msg["content"]
+
+
+def test_pointer_hints_are_idempotent_across_gc_passes():
+    heap = pointer_heap()
+
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+
+    assert heap[3].msg["content"].count("superseded") == 1
+
+
+def test_pointer_hints_follow_a_newer_correction():
+    heap = pointer_heap()
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+    heap += [reads(8, "d.txt", 5), result(9, "d.txt", "Correction: the access code for project ORION is now 5555.", 5)]
+
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+
+    assert "ORION (superseded by msg 9)" in heap[3].msg["content"]
+    assert "superseded by msg 5" not in heap[3].msg["content"]
+
+
+def test_pointer_hints_append_when_the_key_is_only_in_the_label():
+    heap = orion_heap(2)
+    heap[3].label = "ORION"
+    C.kill(heap[3], "pointer")
+    C.kill(heap[5], "pointer")
+
+    C.collect("none", heap, {"budget": 100, "hints": "pointer"})
+
+    assert "keys: ORION (superseded by msg 5); call" in heap[3].msg["content"]
+
+
+def test_fresh_hints_never_add_a_pointer():
+    heap = orion_heap(2)
+    C.kill(heap[3], "fresh")
+    C.kill(heap[5], "fresh")
+
+    C.collect("none", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "superseded" not in heap[3].msg["content"]
