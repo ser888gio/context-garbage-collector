@@ -81,7 +81,7 @@ def pressure_note(heap, budget):
                                        f"{sum(o.dead for o in heap)} messages collected."}
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="", embed=None):
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="", embed=None, coalesce=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
@@ -142,7 +142,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             end = "oom"
             break
 
-        msgs = [o.msg for o in heap]
+        msgs = C.render(heap, coalesce)
         n, chars = common_prefix(prev, msgs)
         shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
         cache_breaks += n < len(prev)
@@ -206,7 +206,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
                 o.msg["content"] = f"[msg {o.id}] {result}"
 
     row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "hints": hints, "pressure": pressure, "tag": tag, "budget": budget, "task_family": task["family"], "task_id": task["id"],
+           "trigger": trigger, "hints": hints, "pressure": pressure, "coalesce": coalesce, "tag": tag, "budget": budget, "task_family": task["family"], "task_id": task["id"],
            "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer and not (task.get("wrong") and task["wrong"] in answer), "end": end, "error": error,
            "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
@@ -288,6 +288,7 @@ def main():
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers/fresh/pointer: what collected stubs carry (false=none, true=keys)")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
+    p.add_argument("--coalesce", default="false", help="comma list of true/false: render runs of collected tool results as one message")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
@@ -297,24 +298,25 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    done = {(r["model"], r["strategy"], r["trigger"], C.stub_mode(r.get("hints", False)), r.get("pressure", False), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {(r["model"], r["strategy"], r["trigger"], C.stub_mode(r.get("hints", False)), r.get("pressure", False), r.get("coalesce", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  [{"true": True, "false": False}.get(h, h) for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")])
-        for family, upfront, pos, seed, trigger, strategy, hints, pressure in cells:
+                                  [{"true": True, "false": False}.get(h, h) for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")],
+                                  [x == "true" for x in a.coalesce.split(",")])
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, C.stub_mode(hints), pressure, a.budget, task["id"]) in done:
+            if (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break

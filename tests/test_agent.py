@@ -474,3 +474,18 @@ def test_api_key_in_an_error_url_is_redacted_from_the_stored_error():
     row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
 
     assert row["error"] == "Exception: 400 for url https://x.test/v1:embed?key=REDACTED failed"
+
+
+def test_coalesce_run_shows_the_model_one_collected_message_and_records_the_flag():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    seen, fake = [], FakeAgent()
+
+    def spy(messages, tools):
+        seen.append(messages)
+        return fake(messages, tools)
+
+    row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, spy, max_turns=200, coalesce=True)
+
+    assert any(m["role"] == "user" and m["content"].startswith("[collected ") and "earlier tool results" in m["content"]
+               for msgs in seen for m in msgs)
+    assert row["coalesce"] is True
