@@ -434,3 +434,43 @@ def test_semantic_run_records_embed_calls():
 
 def test_other_strategies_record_zero_embed_calls():
     assert run("mark_sweep", 4000)["embed_calls"] == 0
+
+
+def test_with_retry_retries_a_plain_exception_that_mentions_a_quota_error():
+    attempts = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise Exception("BadRequest 429 RESOURCE_EXHAUSTED: quota exceeded")
+        return "ok"
+
+    assert agent.with_retry(flaky, "fake", sleep=lambda s: None) == "ok"
+    assert len(attempts) == 3
+
+
+def test_with_retry_does_not_retry_an_unrelated_exception():
+    def broken():
+        raise ValueError("bad input")
+
+    with pytest.raises(ValueError):
+        agent.with_retry(broken, "fake", sleep=lambda s: None)
+
+
+def test_embed_failure_in_the_collector_ends_that_run_as_api_error():
+    def embed(texts):
+        raise Exception("boom from embed")
+    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
+
+    assert row["end"] == "api_error"
+    assert row["error"] == "Exception: boom from embed"
+
+
+def test_api_key_in_an_error_url_is_redacted_from_the_stored_error():
+    def embed(texts):
+        raise Exception("400 for url https://x.test/v1:embed?key=SECRET123 failed")
+    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
+
+    assert row["error"] == "Exception: 400 for url https://x.test/v1:embed?key=REDACTED failed"
