@@ -16,7 +16,8 @@ def load(path):
                          "max_context_tokens": float("nan"), "recalls": float("nan"), "cost_usd": 0.0}.items():
         if col not in df:
             df[col] = default
-    df[["hints", "pressure"]] = df[["hints", "pressure"]].fillna(False).astype(bool)
+    df["pressure"] = df.pressure.fillna(False).astype(bool)
+    df["hints"] = df.hints.fillna("none").replace({False: "none", True: "keys"}).astype(str)
     df["tag"] = df.tag.fillna("")
     df["cached_share"] = df.cached_input_tokens / df.input_tokens
     df["oom"] = df.end == "oom"
