@@ -373,3 +373,33 @@ def collect(strategy, heap, st):
     if st.get("hints") in ("fresh", "pointer"):
         refresh_stubs(heap, pointers=st["hints"] == "pointer")
     return freed
+
+
+def dead_stub_pair(a, r):
+    calls = a.msg.get("tool_calls") or []
+    return (a.dead and len(calls) == 1 and not a.msg.get("content") and r.dead and r.msg.get("role") == "tool"
+            and (r.msg.get("content") or "").startswith("[collected:"))
+
+
+def render(heap, coalesce):
+    # Dozens of consecutive (tool_call, stub) pairs make models lose count of what they already read.
+    if not coalesce:
+        return [o.msg for o in heap]
+    out, entries, i = [], [], 0
+
+    def flush():
+        if entries:
+            out.append({"role": "user", "content": f"[collected {len(entries)} earlier tool results, in order: "
+                                                   f"{'; '.join(entries)}; call recall(id) to restore]"})
+            entries.clear()
+
+    while i < len(heap):
+        if i + 1 < len(heap) and dead_stub_pair(heap[i], heap[i + 1]):
+            entries.append(heap[i + 1].msg["content"].removeprefix("[collected: ").split("; call recall(")[0])
+            i += 2
+        else:
+            flush()
+            out.append(heap[i].msg)
+            i += 1
+    flush()
+    return out

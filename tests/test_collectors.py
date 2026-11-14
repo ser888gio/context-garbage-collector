@@ -608,3 +608,71 @@ def test_fresh_hints_never_add_a_pointer():
     C.collect("none", heap, {"budget": 100, "hints": "fresh"})
 
     assert "superseded" not in heap[3].msg["content"]
+
+
+def read_heap(n, hints=False):
+    heap = [sys_msg(), user(1, "Read files.")]
+    for k in range(n):
+        heap += [reads(2 + 2 * k, f"{k}.txt", k + 1), result(3 + 2 * k, f"{k}.txt", "ORION 4821 " + "x" * 200, k + 1)]
+    return heap
+
+
+def kill_pair(heap, k, hints=False):
+    C.kill(heap[2 + 2 * k], hints)
+    C.kill(heap[3 + 2 * k], hints)
+
+
+def test_render_without_coalesce_is_the_plain_message_list():
+    heap = read_heap(2)
+    kill_pair(heap, 0)
+    kill_pair(heap, 1)
+
+    assert C.render(heap, False) == [o.msg for o in heap]
+
+
+def test_render_coalesces_a_run_of_dead_pairs_into_one_user_message():
+    heap = read_heap(2)
+    kill_pair(heap, 0)
+    kill_pair(heap, 1)
+
+    assert C.render(heap, True)[2:] == [{"role": "user", "content":
+        "[collected 2 earlier tool results, in order: msg 3 read_file 0.txt; msg 5 read_file 1.txt; call recall(id) to restore]"}]
+
+
+def test_render_coalesced_entries_keep_the_stub_hints():
+    heap = read_heap(1)
+    kill_pair(heap, 0, True)
+
+    assert C.render(heap, True)[2]["content"] == (
+        "[collected 1 earlier tool results, in order: msg 3 read_file 0.txt — keys: 4821, ORION; call recall(id) to restore]")
+
+
+def test_render_live_pair_splits_runs():
+    heap = read_heap(3)
+    kill_pair(heap, 0)
+    kill_pair(heap, 2)
+
+    out = C.render(heap, True)
+
+    assert [m["role"] for m in out] == ["system", "user", "user", "assistant", "tool", "user"]
+    assert "msg 3 read_file 0.txt" in out[2]["content"] and "msg 7 read_file 2.txt" in out[5]["content"]
+
+
+def test_render_dead_pair_without_a_stub_passes_through():
+    heap = read_heap(1)
+    heap[3].msg["content"] = "short"
+    C.kill(heap[2])
+    C.kill(heap[3])
+
+    assert C.render(heap, True) == [o.msg for o in heap]
+
+
+def test_render_does_not_mutate_the_heap():
+    heap = read_heap(2)
+    kill_pair(heap, 0)
+    kill_pair(heap, 1)
+    before = json.dumps([o.msg for o in heap])
+
+    C.render(heap, True)
+
+    assert json.dumps([o.msg for o in heap]) == before
