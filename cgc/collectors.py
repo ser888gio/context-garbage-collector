@@ -343,11 +343,16 @@ STRATEGIES["manual"] = none
 
 def refresh_stubs(heap):
     # Runs over all dead stubs each pass: a correction usually arrives after the old file was collected.
-    f = {o.id: facts(o) for o in heap}
+    # Global, not per message: the correction's own stub also lists the revoked number it mentions.
+    latest, seen = {}, {}
+    for o in sorted(heap, key=lambda o: o.id):
+        for k, v in facts(o).items():
+            latest[k] = v
+            seen.setdefault(k, set()).add(v)
+    gone = {v for k, vs in seen.items() for v in vs if v != latest[k]}
     for o in heap:
         if not (o.dead and o.saved):
             continue
-        gone = {v for k, v in f[o.id].items() if any(f[p.id].get(k, v) != v for p in heap if p.id > o.id)}
         m = re.search(r" — keys: (.*?)(?=; call)", o.msg["content"])
         if gone and m:
             kept = [k for k in m.group(1).split(", ") if k not in gone]

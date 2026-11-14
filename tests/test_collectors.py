@@ -533,3 +533,13 @@ def test_fresh_hints_see_a_correction_that_was_itself_collected():
     C.collect("none", heap, {"budget": 100, "hints": "fresh"})
 
     assert "4821" not in heap[3].msg["content"]
+
+
+def test_fresh_hints_scrub_the_revoked_number_from_the_correction_stub():
+    heap = orion_heap(2)
+    C.kill(heap[5], "fresh")
+
+    C.collect("none", heap, {"budget": 100, "hints": "fresh"})
+
+    assert "7310" in heap[5].msg["content"]
+    assert "4821" not in heap[5].msg["content"]
