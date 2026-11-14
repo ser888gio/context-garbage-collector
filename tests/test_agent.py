@@ -403,3 +403,34 @@ def test_mark_sweep_chain_recalls_ten_times_on_multihop_when_the_question_comes_
     row = run_hop("mark_sweep_chain", budget=4000, upfront=False)
 
     assert (row["end"], row["success"], row["recalls"], row["tokens_freed"]) == ("answered", True, 10, 13972)
+
+
+def test_paraphrase_question_shares_no_key_with_any_file_and_needle_is_at_its_position():
+    t = tasks.paraphrase_task(seed=3, n_files=10, position=0.5)
+    key = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b|\b\d{4,}\b")
+
+    assert key.findall(t["question"]) == []
+    assert t["answer"] in t["files"]["notes/05.txt"]
+
+
+def test_paraphrase_builder_is_deterministic_and_names_the_target_by_description():
+    a, b = tasks.paraphrase_task(seed=3, n_files=10), tasks.paraphrase_task(seed=3, n_files=10)
+
+    assert a == b
+    assert a["id"].startswith("paraphrase-")
+    assert re.search(r"Project \w+ is the (.+)\. The access", a["files"]["notes/05.txt"]).group(1) in a["question"]
+
+
+def test_semantic_run_records_embed_calls():
+    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    vocab = ["orion", "access", "code", "project"]
+
+    def embed(texts):
+        return [[t.lower().count(w) for w in vocab] for t in texts]
+    row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
+
+    assert row["embed_calls"] == 11
+
+
+def test_other_strategies_record_zero_embed_calls():
+    assert run("mark_sweep", 4000)["embed_calls"] == 0

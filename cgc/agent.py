@@ -9,6 +9,7 @@ from pathlib import Path
 from cgc import collectors as C
 from cgc.tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
 
+EMBED_MODEL = "gemini/gemini-embedding-001"
 RESULTS = Path("results")
 RUNS = RESULTS / "runs.jsonl"
 
@@ -71,7 +72,7 @@ def pressure_note(heap, budget):
                                        f"{sum(o.dead for o in heap)} messages collected."}
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag=""):
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="", embed=None):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
@@ -84,7 +85,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     if trigger.count(":") == 2:
         st["target"] = float(trigger.split(":")[2])
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, forgets=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
         resp = complete([{"role": "system", "content": SUMMARY_SYSTEM},
@@ -96,6 +97,14 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         return resp.choices[0].message.content or ""
 
     st["summarize"] = summarize
+
+    if strategy == "semantic":
+        raw = embed or litellm_embed(EMBED_MODEL)
+
+        def counted(texts):
+            s["embed_calls"] += 1
+            return raw(texts)
+        st["embed"] = counted
     if strategy == "oracle":
         st["oracle_keys"] = {task["answer"]}
     prev, shares, cache_breaks = [], [], 0
@@ -192,22 +201,41 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     return row, trace
 
 
-def litellm_complete(model):
+def with_retry(call, label):
     import litellm
     litellm.suppress_debug_info = True
     retryable = (litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.InternalServerError,
                  litellm.APIConnectionError, litellm.Timeout)
+    for i in range(7):
+        try:
+            return call()
+        except retryable as e:
+            wait = min(30 * 2 ** i, 600)
+            print(f"  {type(e).__name__} on {label}, retry in {wait}s", flush=True)
+            time.sleep(wait)
+    raise RateLimited(label)
+
+
+def litellm_complete(model):
+    import litellm
 
     def complete(messages, tools):
-        for i in range(7):
-            try:
-                return litellm.completion(model=model, messages=messages, tools=tools or None, temperature=0, timeout=300)
-            except retryable as e:
-                wait = min(30 * 2 ** i, 600)
-                print(f"  {type(e).__name__} on {model}, retry in {wait}s", flush=True)
-                time.sleep(wait)
-        raise RateLimited(model)
+        return with_retry(lambda: litellm.completion(model=model, messages=messages, tools=tools or None,
+                                                     temperature=0, timeout=300), model)
     return complete
+
+
+def litellm_embed(model):
+    import litellm
+
+    def embed(texts):
+        out = []
+        for i in range(0, len(texts), 50):
+            batch = texts[i:i + 50]
+            resp = with_retry(lambda: litellm.embedding(model=model, input=batch, timeout=300), model)
+            out += [d["embedding"] for d in resp.data]
+        return out
+    return embed
 
 
 def is_paid(model):
@@ -234,11 +262,11 @@ def save(row, trace):
 def main():
     p = argparse.ArgumentParser(description="Sweep GC strategies over needle tasks. Resumable: finished cells are skipped.")
     p.add_argument("--models", default="openrouter/nvidia/nemotron-3.5-lightning:free")
-    p.add_argument("--strategies", default=",".join(C.STRATEGIES))
+    p.add_argument("--strategies", default=",".join(n for n in C.STRATEGIES if n != "semantic"))
     p.add_argument("--triggers", default="threshold:0.7", help="comma list of every_turn / threshold:P / threshold:P:T (collect down to T*budget)")
     p.add_argument("--seeds", default="0,1,2")
     p.add_argument("--positions", default="0.5")
-    p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison")
+    p.add_argument("--family", default="needle", help="comma list of needle / multihop / poison / paraphrase")
     p.add_argument("--upfront", default="false", help="comma list of true/false")
     p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers: what collected stubs carry (false=none, true=keys)")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")

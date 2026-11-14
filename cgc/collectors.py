@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from dataclasses import dataclass
 
@@ -293,6 +294,30 @@ def oracle(heap, st):
     return [o.id for o in out]
 
 
+def cosine(a, b):
+    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(x * x for x in b))
+    return sum(x * y for x, y in zip(a, b)) / (na * nb) if na and nb else 0.0
+
+
+def semantic(heap, st):
+    if "embed" not in st:
+        raise ValueError("semantic strategy needs st['embed'], a callable list[str] -> list[vector]")
+    cache = st.setdefault("_emb", {})
+    pool = collectable(heap)
+    objs = [o for o in heap if o.live and o.root] + pool
+    want = {(o.id, hash(text(o))): text(o) for o in objs if (o.id, hash(text(o))) not in cache}
+    if want:
+        cache.update(zip(want, st["embed"](list(want.values()))))
+    vec = {o.id: cache[(o.id, hash(text(o)))] for o in objs}
+    roots = [vec[o.id] for o in objs if o.root]
+    centre = [sum(col) for col in zip(*roots)] if roots else []
+    ranked = sorted(pool, key=lambda o: (-cosine(vec[o.id], centre), o.id))
+    out = ranked[st.get("semantic_k", 4):]
+    for o in out:
+        kill(o, st.get("hints", False))
+    return [o.id for o in out]
+
+
 def with_target(fn):
     # Hysteresis for reachability collectors: after the normal pass, also collect the oldest
     # reachable-but-not-protected tool results until size <= target * budget.
@@ -310,7 +335,7 @@ def with_target(fn):
 
 
 STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, refcount, mark_sweep, mark_sweep_chain, write_barrier,
-                                             generational, h2o, oracle)}
-for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "generational"):
+                                             generational, h2o, oracle, semantic)}
+for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "generational", "semantic"):
     STRATEGIES[_n] = with_target(STRATEGIES[_n])
 STRATEGIES["manual"] = none
