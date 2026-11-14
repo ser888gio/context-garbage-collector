@@ -2,7 +2,7 @@
 
 ## Hypotheses
 
-Each one is checked against `results/runs.jsonl`. Status: open / supported / rejected / unclear.
+Each one is checked against `results/runs.jsonl`. Status: open / supported / rejected / unclear. Sweep 3 statuses (n=3, noise as large as the effects) are provisional until sweep 4 (10 seeds).
 
 | # | Hypothesis | How we check it | Status |
 |---|---|---|---|
@@ -16,16 +16,16 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H8 | Simple LRU masking is as good as the smarter collectors (as in "The Complexity Trap"). | lru_mask vs mark_sweep/generational: success and tokens. | open |
 | H9 | GC can make the agent thrash: recall, re-collect, recall again. | repeated recalls of the same id in traces. | open |
 | H10 | The oracle sets the upper bound; real collectors reach X% of its success at Y% of its tokens. | `oracle` vs each strategy: success and input_tokens; `analysis/audit.py` for what each lost. | open |
-| H11 | On multi-hop tasks mark-sweep beats LRU/truncate, because it follows reference chains. | `--family multihop`: success and recalls of mark_sweep vs lru_mask/truncate. | open |
-| H12 | A write barrier removes stale facts and fixes poisoning. | `--family poison`: success of write_barrier vs mark_sweep. | open |
-| H13 | A model managing its own memory (manual forget) does worse than a 20-line algorithm. | `manual` vs `mark_sweep`/`lru_mask`: success, oom rate, `forgets`. | open |
-| H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | open |
-| H15 | The production baseline (mask + summary) is as good as any GC strategy. | `hybrid` and `mask` vs every other strategy: success, tokens, cost incl. `summary_calls`. | open |
+| H11 | On multi-hop tasks mark-sweep beats LRU/truncate, because it follows reference chains. | `--family multihop`: success and recalls of mark_sweep vs lru_mask/truncate. | no support (sweeps 3+4 pooled: truncate and lru_mask match mark_sweep) |
+| H12 | A write barrier removes stale facts and fixes poisoning. | `--family poison`: success of write_barrier vs mark_sweep. | no effect seen (n=3, tie with mark_sweep) |
+| H13 | A model managing its own memory (manual forget) does worse than a 20-line algorithm. | `manual` vs `mark_sweep`/`lru_mask`: success, oom rate, `forgets`. | leaning supported (sweep3, n=6: 1/6 success, 5 oom) |
+| H14 | Telling the model its memory pressure improves recall and reduces oom. | `pressure=true` vs `false`: success, oom, recalls. | unclear (n=3; manual 1/6 to 3/6, others unchanged) |
+| H15 | The production baseline (mask + summary) is as good as any GC strategy. | `hybrid` and `mask` vs every other strategy: success, tokens, cost incl. `summary_calls`. | leaning supported (sweep3, n=6: mask/hybrid 6/6 but ~35% more tokens) |
 | H16 | Mark-sweep leaks fewer tokens than refcount (excess over oracle). | `excess_tokens` per strategy: mark_sweep vs refcount. | open |
 | H17 | Stub hints (keys of the collected message) are needed for recall to work. | `hints=true` vs `false`: success and recalls per collector. | supported (Groq, n=3) |
-| H18 | Keys carry most of the hint gain; previews add little. | `--hints none,keys,preview,numbers`: success, recalls, input tokens per collector. | open |
-| H19 | Hysteresis (collect to 40%) cuts cache breaks at equal success. | `threshold:0.7:0.4` vs `threshold:0.7`: `cache_breaks`, success. | open |
-| H20 | Heavy-hitter retention (h2o) matches mark-sweep without a reference graph walk. | `h2o` vs `mark_sweep` on needle and multihop: success, recalls, tokens. | open |
+| H18 | Keys carry most of the hint gain; previews add little. | `--hints none,keys,preview,numbers`: success, recalls, input tokens per collector. | leaning supported (sweep3, n=3: keys/numbers/preview all 3/3, previews cost tokens) |
+| H19 | Hysteresis (collect to 40%) cuts cache breaks at equal success. | `threshold:0.7:0.4` vs `threshold:0.7`: `cache_breaks`, success. | no effect seen (sweep3, n=3) |
+| H20 | Heavy-hitter retention (h2o) matches mark-sweep without a reference graph walk. | `h2o` vs `mark_sweep` on needle and multihop: success, recalls, tokens. | leaning supported on needle (sweep3, n=3: 3/3 but ~35% more tokens than mark_sweep); multihop untested |
 
 ## Roadmap
 
@@ -39,6 +39,7 @@ Done:
 - Built, not yet run: stub modes (`--hints none,keys,preview,numbers`), hysteresis trigger (`threshold:P:T`), `h2o` collector (H18-H20). LLM-gloss stub mode is future work.
 
 Next:
+0. Fix the chain cut: let tool results act as referencers only for keys that also appear in a root, then rerun multihop with an upfront question.
 1. First sweep on free models; write findings to `JOURNAL.md`.
 2. More task families: long chat, research.
 3. Vary needle position (lost-in-the-middle) and budget.
@@ -49,4 +50,5 @@ Next:
 
 - References are found by regex (paths, CAPS names, numbers). Plain-word links are missed.
 - Token sizes are estimated as chars/4, the same for every model.
+- Tool results are not referencers, so a link file ("ORION is the same as VEGA") cannot keep the value file alive; only roots, user and assistant messages propagate reachability. Multihop chains are cut after the link (sweep 3 investigation: not the cause of the observed failures).
 - Free models are rate-limited; sweeps run slowly and resume where they stopped.
