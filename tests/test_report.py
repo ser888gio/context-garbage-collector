@@ -41,3 +41,15 @@ def test_excess_tokens_is_prompt_tokens_per_turn_over_the_oracle_run(tmp_path):
     assert t.loc["oracle", "excess_tokens"] == 0.0
     assert t.loc["mark_sweep", "excess_tokens"] == 150.0
     assert t.loc["refcount", "excess_tokens"] != t.loc["refcount", "excess_tokens"]
+
+
+def test_load_turns_missing_coalesce_and_error_into_false_and_empty_string(tmp_path):
+    legacy = {k: v for k, v in ROWS[0].items()}
+    new = {**ROWS[0], "coalesce": True, "error": "boom"}
+    path = tmp_path / "runs.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in [legacy, new]))
+
+    df = report.load(path)
+
+    assert df.coalesce.tolist() == [False, True]
+    assert df.error.tolist() == ["", "boom"]
