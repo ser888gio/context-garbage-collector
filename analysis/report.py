@@ -17,6 +17,8 @@ def load(path):
         if col not in df:
             df[col] = default
     df["pressure"] = df.pressure.fillna(False).astype(bool)
+    df["coalesce"] = df.coalesce.fillna(False).astype(bool)
+    df["error"] = df.error.fillna("").astype(str)
     df["hints"] = df.hints.fillna("none").replace({False: "none", True: "keys"}).astype(str)
     df["tag"] = df.tag.fillna("")
     df["cached_share"] = df.cached_input_tokens / df.input_tokens

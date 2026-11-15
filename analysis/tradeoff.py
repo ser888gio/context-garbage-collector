@@ -12,17 +12,13 @@ FAMILIES = ["needle", "multihop", "poison"]
 MOVERS = {"mark_sweep": "#1f77b4", "refcount": "#d95f02", "write_barrier": "#2ca02c"}
 REFS = ["oracle", "truncate", "lru_mask"]
 MIN_N = 8
-# (dx, dy) in points, per (family, strategy); defaults below. Chosen by eye against the real data.
-OFFSETS = {}
-DEFAULT_OFFSET = (6, 6)
 
 
 def points(path):
     df = load(path)
     df = df[df.model.str.contains("gpt-oss-120b") & (df.trigger == "threshold:0.7") & ~df.pressure
             & df.strategy.isin(list(MOVERS) + REFS)]
-    df = df.assign(coalesce=df.coalesce.fillna(False).astype(bool),
-                   api_errors=df.error.fillna("").astype(str).ne(""))
+    df = df.assign(api_errors=df.error.ne(""))
     keys = (df.hints == "keys") & ~df.coalesce
     ptr = (df.hints == "pointer") & df.coalesce
     df = df[keys | ptr].assign(variant=lambda d: (d.hints == "pointer").map({True: "pointer+coalesce", False: "keys"}))
@@ -41,7 +37,7 @@ def plot(pts, out):
         for _, r in p[p.strategy.isin(REFS)].iterrows():
             ax.scatter(r.tokens / 1000, r.success, c="#888888", marker="D", s=40, zorder=2)
             ax.annotate(r.strategy, (r.tokens / 1000, r.success), fontsize=8, color="#555555",
-                        xytext=OFFSETS.get((fam, r.strategy), DEFAULT_OFFSET), textcoords="offset points")
+                        xytext=(6, 6), textcoords="offset points")
         for s, color in MOVERS.items():
             a = p[(p.strategy == s) & (p.variant == "keys")]
             b = p[(p.strategy == s) & (p.variant == "pointer+coalesce")]
