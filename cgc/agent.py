@@ -81,7 +81,47 @@ def pressure_note(heap, budget):
                                        f"{sum(o.dead for o in heap)} messages collected."}
 
 
-def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="", embed=None, coalesce=False):
+def parse_trigger(trigger):
+    parts = trigger.split(":")
+    threshold = float(parts[1]) if len(parts) > 1 else 0.7
+    target = float(parts[2]) if len(parts) == 3 else None
+    return threshold, target
+
+
+def add_usage(s, resp):
+    s["input_tokens"] += resp.usage.prompt_tokens
+    s["output_tokens"] += resp.usage.completion_tokens
+    s["cost_usd"] += cost_of(resp)
+
+
+def guarded(fn, *args):
+    try:
+        return fn(*args), ""
+    except RateLimited:
+        raise
+    except Exception as e:
+        return None, error_text(e)
+
+
+def is_success(task, answer):
+    wrong = task.get("wrong")
+    return task["answer"] in answer and not (wrong and wrong in answer)
+
+
+def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0):
+    row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **cfg,
+           "task_family": task["family"], "task_id": task["id"], "provider": model.split("/")[0], "model": model,
+           "success": is_success(task, answer), "end": end, "error": error, "answer": answer[:200], "turns": turn, **s,
+           "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0,
+           "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
+    trace = {"row": row, "events": events,
+             "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
+                       "label": o.label, "msg": o.msg, "saved": o.saved} for o in heap]}
+    return row, trace
+
+
+def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
+        embed=None, coalesce=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
@@ -90,19 +130,19 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
 
     add({"role": "system", "content": SYSTEM}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
-    st = {"budget": budget, "hints": hints, "threshold": float(trigger.split(":")[1]) if ":" in trigger else 0.7}
-    if trigger.count(":") == 2:
-        st["target"] = float(trigger.split(":")[2])
+    threshold, target = parse_trigger(trigger)
+    st = {"budget": budget, "hints": hints, "threshold": threshold}
+    if target is not None:
+        st["target"] = target
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0, max_context_tokens=0, max_est_tokens=0)
+             recalls=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
+             max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
         resp = complete([{"role": "system", "content": SUMMARY_SYSTEM},
                          {"role": "user", "content": "\n\n".join(parts)}], [])
         s["summary_calls"] += 1
-        s["input_tokens"] += resp.usage.prompt_tokens
-        s["output_tokens"] += resp.usage.completion_tokens
-        s["cost_usd"] += cost_of(resp)
+        add_usage(s, resp)
         return resp.choices[0].message.content or ""
 
     st["summarize"] = summarize
@@ -123,16 +163,37 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     tools = TOOLS + [FORGET_TOOL] * manual
     known = {t["function"]["name"] for t in tools}
 
+    def handle_call(c, turn):
+        try:
+            args = json.loads(c.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        sig = c.function.name + json.dumps(args, sort_keys=True)
+        if c.function.name not in known:
+            s["unknown_tool_calls"] += 1
+        if c.function.name == "recall":
+            s["recalls"] += 1
+        elif sig in seen_calls:
+            s["repeated_calls"] += 1
+        seen_calls.add(sig)
+        if manual and c.function.name == "forget":
+            done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
+            s["forgets"] += len(done)
+            result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
+        else:
+            result = call_tool(c.function.name, args, task, heap, turn)
+        label = f"{c.function.name} {args.get('path', '')}".strip()
+        o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+        if manual:
+            o.msg["content"] = f"[msg {o.id}] {result}"
+
     turn = 0
     for turn in range(1, max_turns + 1):
         before = C.size(heap)
-        if trigger == "every_turn" or before > budget * st["threshold"]:
-            try:
-                freed = C.collect(strategy, heap, st)
-            except RateLimited:
-                raise
-            except Exception as e:
-                error, end = error_text(e), "api_error"
+        if trigger == "every_turn" or before > budget * threshold:
+            freed, error = guarded(C.collect, strategy, heap, st)
+            if error:
+                end = "api_error"
                 break
             s["gc_runs"] += 1
             s["tokens_freed"] += before - C.size(heap)
@@ -147,22 +208,17 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
         cache_breaks += n < len(prev)
         prev = copy.deepcopy(msgs)  # collectors mutate messages in place
-        try:
-            # The note is appended after the prefix accounting above and never stored in the heap,
-            # so it can't break the cached prefix or show up in later turns.
-            note = [pressure_note(heap, budget)] if pressure or manual else []
-            resp = complete(msgs + note, tools)
-        except RateLimited:
-            raise
-        except Exception as e:
-            error, end = error_text(e), "api_error"
+        # The note is appended after the prefix accounting above and never stored in the heap,
+        # so it can't break the cached prefix or show up in later turns.
+        note = [pressure_note(heap, budget)] if pressure or manual else []
+        resp, error = guarded(complete, msgs + note, tools)
+        if error:
+            end = "api_error"
             break
+        add_usage(s, resp)
         u = resp.usage
-        s["input_tokens"] += u.prompt_tokens
-        s["output_tokens"] += u.completion_tokens
         s["cached_input_tokens"] += getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", 0) or 0
         s["max_context_tokens"] = max(s["max_context_tokens"], u.prompt_tokens)
-        s["cost_usd"] += cost_of(resp)
 
         m = resp.choices[0].message
         calls = m.tool_calls or []
@@ -182,38 +238,11 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             break
 
         for c in calls:
-            try:
-                args = json.loads(c.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            sig = c.function.name + json.dumps(args, sort_keys=True)
-            if c.function.name not in known:
-                s["unknown_tool_calls"] += 1
-            if c.function.name == "recall":
-                s["recalls"] += 1
-            elif sig in seen_calls:
-                s["repeated_calls"] += 1
-            seen_calls.add(sig)
-            if manual and c.function.name == "forget":
-                done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
-                s["forgets"] += len(done)
-                result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
-            else:
-                result = call_tool(c.function.name, args, task, heap, turn)
-            label = f"{c.function.name} {args.get('path', '')}".strip()
-            o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
-            if manual:
-                o.msg["content"] = f"[msg {o.id}] {result}"
+            handle_call(c, turn)
 
-    row = {"run_id": uuid.uuid4().hex[:12], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "strategy": strategy,
-           "trigger": trigger, "hints": hints, "pressure": pressure, "coalesce": coalesce, "tag": tag, "budget": budget, "task_family": task["family"], "task_id": task["id"],
-           "provider": model.split("/")[0], "model": model, "success": task["answer"] in answer and not (task.get("wrong") and task["wrong"] in answer), "end": end, "error": error,
-           "answer": answer[:200], "turns": turn, **s,
-           "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0, "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
-    trace = {"row": row, "events": events,
-             "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
-                       "label": o.label, "msg": o.msg, "saved": o.saved} for o in heap]}
-    return row, trace
+    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, tag=tag,
+               budget=budget)
+    return build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0)
 
 
 def with_retry(call, label, sleep=time.sleep):
