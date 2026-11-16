@@ -2,35 +2,104 @@
 
 What happens when classic garbage-collection algorithms manage an LLM agent's context window?
 
-The context is the heap and each message or tool result is an object. Roots are the system prompt, the task, and the latest turn. References between messages are found with regexes (file paths, CAPS names, numbers). When the context nears a fixed budget, a collector replaces unreachable messages with short stubs such as `[collected: msg 12, read_file a.py]`. The agent has a `recall` tool to bring a stub back, and every recall is logged because a recall means the collector was wrong.
+The context is the heap and each message or tool result is an object. Roots are the system prompt, the task and the newest turn. Two messages reference each other when they share a key: a file path, a CAPS name or a 4+ digit number, found by regex. When the context nears a fixed token budget, a collector replaces messages it thinks are dead with short stubs such as `[collected: msg 12 read_file notes/05.txt — keys: ORION, 4821; call recall(12) to restore]`. The agent can bring a stub back with `recall`, and every recall is logged, because a recall means the collector was wrong.
 
-Status: early-stage experiment; results in docs/JOURNAL.md.
+Status: exploratory experiment. Dated observations are in [docs/JOURNAL.md](docs/JOURNAL.md), the hypotheses and their status in [docs/HYPOTHESES.md](docs/HYPOTHESES.md).
+
+## Findings so far
+
+All numbers below are from one model, `groq/openai/gpt-oss-120b`, with the question asked after the agent has read every file (the hard case), a 16k-token budget and collection at 70% of it. `n` is runs per cell (one run per seed). A single run moves an n=3 cell by 33 points, so treat n=3 cells as hints.
+
+- **The stub decides everything.** With bare stubs every real collector failed the needle task (mark_sweep 0/10, refcount 0/10): the model could not tell which stub held the fact and recalled blindly. Listing the collected message's keys in its stub gave 10/10 for both, with about 35% fewer input tokens and far fewer prompt-cache breaks.
+- **Cheap collectors lose on harder tasks.** On multihop (the answer needs two files) and poison (a fact is corrected later), the collectors that keep more context succeed more and cost more: truncate is the expensive, safe end, mark_sweep the cheap, lossy end ([chart](docs/img/tradeoff.png)).
+- **Following references did not help.** Mark-sweep did worse than plain LRU masking on multihop (6/10 vs 9/10), and the write barrier did not fix poisoning (3/10).
+- **Stale numbers leak through stubs.** Poison failures answered the revoked code because the stub advertised it. Stubs that point at the superseding message, with collected results rendered as one message (`pointer` + coalesce), took mark_sweep and refcount on poison from 2/10 to 10/10.
+- **The model is a bad collector of its own memory.** With a `forget` tool and nothing automatic, it forgot too little and ran out of memory (1/3).
+- **Paraphrase is unsolved.** When the question names a description instead of the project, every real collector is at 3-5/10; only the oracle succeeds.
+
+Other models: `gpt-oss-20b` and Qwen 3.8 27B on Groq failed at tool calling in this harness, and the free Gemini and OpenRouter quotas were too small for sweeps, so every result above rests on one model.
+
+## Strategies tested
+
+A strategy decides which messages to stub when the context passes the threshold. Results: successes / runs on gpt-oss-120b with `keys` hints. Families: needle (one file holds the answer), multihop (a link file points to a value file), poison (a later file revokes an earlier fact), paraphrase (the question names the project by description). "—" means not run.
+
+| Strategy | What it does | Idea from | Needle | Multihop | Poison | Paraphrase |
+|---|---|---|---|---|---|---|
+| `none` | Never collect. Runs out of memory. | Baseline | 0/3 (no hints) | — | — | — |
+| `truncate` | Stub the oldest messages until under budget. | Baseline (sliding window, as in [StreamingLLM](https://arxiv.org/abs/2309.17453)) | 10/10 | 9/10 | 6/10 | — |
+| `mask` | Stub tool results older than 3 turns. | Observation masking, [The Complexity Trap](https://arxiv.org/abs/2508.21433) | 3/3 | — | — | — |
+| `lru_mask` | Stub tool results whose keys no assistant message used in the last 3 turns. | LRU caches; The Complexity Trap | 10/10 | 9/10 | 4/10 | 5/10 |
+| `hybrid` | `mask`, then if still over the threshold, summarize the rest with one LLM call. | Masking + summary, The Complexity Trap | 3/3 | — | — | — |
+| `refcount` | Stub messages that no live user/assistant message references. | Reference counting (classic GC) | 10/10 | 6/10 | 2/10 | — |
+| `mark_sweep` | Walk references from the roots; stub everything unreached. | Mark-sweep (classic GC) | 10/10 | 6/10 | 2/10 | 3/10 |
+| `mark_sweep_chain` | Mark-sweep, but small tool results (at most 3 keys) also pass reachability on, so a link file keeps its value file alive. | This project, after the multihop failures | — | 8/10 | 3/10 | — |
+| `write_barrier` | Mark-sweep, plus stub a message whose fact (CAPS name + number) a newer message contradicts. | Write barriers (classic GC) | 9/10 | 6/10 | 3/10 | — |
+| `generational` | Mark-sweep the young messages each time; survivors are promoted and only swept when memory is tight. | Generational GC (classic GC) | 2/3 | — | — | — |
+| `h2o` | Keep the first 2 messages, the newest 2 turns and the 4 most-referenced tool results; stub the rest. | [H2O heavy-hitter KV eviction](https://arxiv.org/abs/2306.14048) | 3/3 | — | — | — |
+| `semantic` | Keep the 4 messages whose embeddings are closest to the roots; stub the rest. Needs `GEMINI_API_KEY`. | Query-aware selection ([SnapKV](https://arxiv.org/abs/2404.14469), [Quest](https://arxiv.org/abs/2406.10774)) | 10/10 | — | — | 4/10 |
+| `manual` | Collect nothing; the model gets a `forget(ids)` tool and a memory-pressure note. | Self-managed memory, [MemGPT](https://arxiv.org/abs/2310.08560) | 1/3 | — | — | — |
+| `oracle` | Knows the answer; stubs everything that does not contain it. Upper bound. | This project | 10/10 | 10/10 | 10/10 | 10/10 |
+
+Strategies that are not baselines (`refcount`, `mark_sweep`, `mark_sweep_chain`, `write_barrier`, `generational`, `semantic`) also stub the oldest reachable tool results when the trigger sets a lower target (see `threshold:P:T` below).
+
+## Options tested
+
+These change what a stub carries, how the context is shown to the model, or when collection runs. They combine with any strategy.
+
+| Option | What it does | Idea from | Result |
+|---|---|---|---|
+| `--hints none` | Bare stub: message id and tool call only. | — | Every real collector 0/3-0/10 on needle. |
+| `--hints keys` | Stub lists up to 6 keys of the collected message. | This project (first real run, see journal) | 10/10 on needle; ~35% fewer tokens than `none`. |
+| `--hints preview` | Keys plus the first 12 words. | Stub-content ablation, inspired by [LLMLingua](https://arxiv.org/abs/2310.05736) and [ACON](https://arxiv.org/abs/2510.00615) | 3/3, more tokens than keys. |
+| `--hints numbers` | Keys plus every 4+ digit number. | Same ablation | 3/3, about the same as keys. |
+| `--hints fresh` | Keys, with numbers that a newer fact revoked removed from every stub. | This project, after the poison analysis | No gain on poison (1-3/10). |
+| `--hints pointer` | Like `fresh`, and a stale key says which message superseded it: `ORION (superseded by msg 41)`. | This project, after the poison analysis | Poison 6-7/10 alone, 10/10 with coalesce. |
+| `--coalesce true` | Render runs of collected (call, stub) pairs as one message listing them. | This project: dozens of stub pairs made the model lose count of what it had read | With `pointer`: poison 10/10, multihop 8-9/10. |
+| `--pressure true` | Send a `[memory] context N% of budget` note with each call; never stored. | MemGPT's memory-pressure warnings | Unclear (n=3); helped `manual` (1/6 → 3/6). |
+| `--triggers threshold:P:T` | Collect when over P of the budget, then down to T (hysteresis). | Low-water marks in GC; [Don't Break the Cache](https://arxiv.org/abs/2601.06007) | No visible effect on cache breaks (n=3). |
+| `--triggers every_turn` | Collect before every model call. | — | Not run on a real model. |
+| `--positions` | Where the needle file sits in the reading order. | [Lost in the Middle](https://arxiv.org/abs/2307.03172) | Only 0.5 run so far. |
+| `--upfront true` | Ask the question with the task instead of at the end. | — | Not run on a real model. |
+
+## Planned, from other projects
+
+Not built yet; each gets its own branch and a hypothesis in [docs/HYPOTHESES.md](docs/HYPOTHESES.md).
+
+| Feature | What it would do | Idea from | Status |
+|---|---|---|---|
+| `search` tool | Search the text of collected messages and return matching sentences, instead of restoring a whole message with `recall`. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | In progress |
+| Searchable summaries | Keep the original of every message `hybrid` summarized, so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | In progress |
+| Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Queued |
+| `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Queued |
+| Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Queued |
+| `--hints summary` | Stub carries a one-line, model-written summary of the collected message. | Dynamic Context Loading (Moncef Abboud): model-written tool briefs | Idea |
+
+The DCP plugin is AGPL-3.0; only its ideas are reimplemented here, no code is copied.
 
 ## How it works
 
-One run: the agent works through a task while a collector keeps its context under a token budget.
+One run: the agent reads a folder of note files while a collector keeps its context under a token budget, then answers a question.
 
 ```mermaid
 flowchart TD
-    S[cgc.agent sweep<br/>model x strategy x hints x seed] --> T[needle task<br/>30 note files, one holds the answer]
+    S[cgc.agent sweep<br/>model x family x strategy x options x seed] --> T[task<br/>N note files, a few hold facts]
     T --> H[(heap<br/>messages as objects)]
-    H --> C{context over<br/>70% of budget?}
-    C -- yes --> G[collector<br/>mark_sweep / refcount / ...<br/>old messages become stubs]
+    H --> C{context over<br/>threshold?}
+    C -- yes --> G[collector<br/>old messages become stubs]
     C -- no --> O
     G --> O{still over<br/>budget?}
     O -- yes --> X[end: oom]
-    O -- no --> L[LLM call via LiteLLM<br/>Gemini / Groq / OpenRouter]
+    O -- no --> L[LLM call via LiteLLM]
     L --> A{tool call?}
-    A -- read_file / list_files --> H
+    A -- list_files / read_file --> H
     A -- "recall(id)" --> R[restore a stub] --> H
     A -- text answer --> E[end: answered<br/>success = answer matches]
     X --> W[(results/runs.jsonl<br/>results/traces/)]
     E --> W
-    W --> P[analysis.report / audit / timeline]
+    W --> P[analysis: results / report / audit / timeline / tradeoff]
 ```
 
-What a collector sees: messages are objects, roots are always kept, and a message is a reference
-to an older one when they share a key (file path, CAPS name, 4+ digit number).
+What a collector sees: roots are always kept, the newest turn is protected, and a message is reachable when it shares a key with a reachable user or assistant message.
 
 ```mermaid
 flowchart LR
@@ -46,28 +115,9 @@ flowchart LR
     classDef dead fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4
 ```
 
-Grey = unreachable, so mark-sweep turns it into `[collected: msg N ...; call recall(N) to restore]`.
+Grey = unreachable, so mark-sweep turns it into a stub.
 
-## Strategies
-
-| Name | Rule |
-|---|---|
-| `none` | Baseline. Never collect. |
-| `truncate` | Baseline. Drop the oldest messages. |
-| `lru_mask` | Stub tool outputs not touched in the last N turns. |
-| `mask` | Stub tool outputs older than N turns (observation masking, no use tracking). |
-| `hybrid` | `mask`; if still over the threshold, summarize all remaining collectable messages with one LLM call. |
-| `refcount` | Stub objects with no incoming references from live objects. |
-| `mark_sweep` | Stub objects unreachable from the roots. |
-| `mark_sweep_chain` | Mark-sweep, but a reached tool result with at most 3 keys (`chain_max_refs`) also propagates, so link file -> value file chains survive. A `list_files` result has too many keys and stays a leaf. |
-| `write_barrier` | Mark-sweep, plus collect a message whose fact (CAPS key + number) a newer message contradicts. |
-| `generational` | Mark-sweep the young generation often. Promote survivors to an old generation that is collected rarely. |
-| `semantic` | Keep roots, the newest turn and the top-4 (`semantic_k`) collectable messages by embedding cosine similarity to the root texts; collect the rest. Needs `GEMINI_API_KEY` for embeddings (`gemini/gemini-embedding-001`); not in the default `--strategies`. |
-| `h2o` | Heavy-hitter retention (from H2O): pin the first 2 messages (sinks) and the newest 2 turns, keep the 4 tool results most referenced by other messages, collect the rest. Tunable with `h2o_sink`, `h2o_recent`, `h2o_heavy`. |
-| `manual` | Collects nothing automatically. The model gets a `forget(ids)` tool (tool results show `[msg N]`), always sees the memory-pressure note, and runs out of memory if it never forgets. |
-| `oracle` | Knows the answer and keeps only what is needed. Upper bound for the others. |
-
-## Quickstart
+## Running it
 
 ```
 pip install -e ".[test]"
@@ -81,56 +131,54 @@ OPENROUTER_API_KEY=
 GROQ_API_KEY=
 ```
 
-Run the offline tests, then a small sweep, then the report:
+Run the tests, a small sweep, then the results table:
 
 ```
 python -m pytest -q
-python -m cgc.agent --models openrouter/nvidia/nemotron-3.5-lightning:free \
-    --strategies none,truncate,mark_sweep --triggers threshold:0.7 --seeds 0,1,2 --max-cost 0
-python -m analysis.report
+python -m cgc.agent --models groq/openai/gpt-oss-120b --strategies none,truncate,mark_sweep \
+    --hints keys --seeds 0,1,2 --max-cost 2
+python -m analysis.results
 ```
 
-`--family needle,multihop,poison,paraphrase` picks the task family (default `needle`). `paraphrase` names the target only by a plain-word description ("the northern mountain observatory project"), so regex keys from the question find nothing.
+Every option above takes a comma list, and the sweep runs every combination. The sweep is resumable: finished cells are skipped. `--max-cost` is a USD cap over everything already in `results/runs.jsonl`; the default of 0 blocks models LiteLLM lists as paid. Groq's free tier is listed as paid, so Groq sweeps need a nonzero cap even though they cost $0. Run `python -m cgc.agent --help` for every flag.
 
-`--hints` sets what a collected stub carries: `false`/`none` (nothing), `true`/`keys` (keys of the collected message), `preview` (keys + first 12 words), `numbers` (keys + every 4+ digit number), `fresh`, `pointer`. Rows store the mode name; an unknown value is rejected up front. `--triggers threshold:P:T` collects when context exceeds P of the budget and then down to T of it (hysteresis, e.g. `threshold:0.7:0.4`); `threshold:P` is unchanged. For `mark_sweep`, `refcount`, `generational` and `write_barrier`, hysteresis also collects the oldest reachable tool results until the target is met.
-
-The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
-
-## Long runs
-
-`scripts/sweep.ps1` starts a sweep as a hidden, detached process that keeps running after the terminal closes, and prints its PID:
+Long sweeps: `scripts/sweep.ps1` starts one as a hidden, detached process that survives the terminal and prints its PID. Quote comma lists in PowerShell, or it splits them into separate arguments.
 
 ```
-powershell -File scripts/sweep.ps1 -Name sweep3 --models groq/openai/gpt-oss-120b --strategies 'mark_sweep,refcount' --hints 'false,true' --tag sweep3
+powershell -File scripts/sweep.ps1 -Name sweep3 --models groq/openai/gpt-oss-120b --strategies 'mark_sweep,refcount' --hints 'none,keys' --tag sweep3
 ```
 
-Quote comma lists inside PowerShell (`'false,true'`); unquoted, PowerShell splits them into separate arguments.
+Output goes to `results/<Name>.log` and `results/<Name>.err`; stop it with `Stop-Process -Id <PID>`. Watch progress at http://localhost:8000/analysis/dashboard.html after `python -m http.server 8000` from the repo root.
 
-Output goes to `results/<Name>.log` and `results/<Name>.err`; stop it with `Stop-Process -Id <PID>`. Watch progress at http://localhost:8000/analysis/dashboard.html after `python -m http.server 8000` from the repo root. `python -m analysis.results` regenerates [docs/RESULTS.md](docs/RESULTS.md).
+Analysis:
+- `python -m analysis.results` regenerates [docs/RESULTS.md](docs/RESULTS.md) (experiments and results per cell).
+- `python -m analysis.report` prints a table and plots success against tokens.
+- `python -m analysis.audit` says, per run, whether the needle was collected and recalled.
+- `python -m analysis.timeline results/traces/<run_id>.json` plots one run's heap over time.
+- `python -m analysis.tradeoff results/runs.jsonl` draws the cost-vs-accuracy chart.
 
-Inspect runs:
-- `analysis.timeline`: heap timeline plot for one run, `python -m analysis.timeline results/traces/<run_id>.json`.
-- `analysis.audit`: checks whether the collector dropped the needle, `python -m analysis.audit`.
+## Tests
+
+The tests are end to end. They start a local OpenAI-compatible server backed by a scripted agent, run the real sweep CLI against it in a subprocess, and check the files it writes and the output of the analysis scripts. No API keys or network access are needed.
 
 ## What gets recorded
 
 One row per run in `results/runs.jsonl`:
-- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `budget`, `task_family`, `task_id`, `provider`, `model`
-- outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `summary_calls`, `embed_calls` (calls to the embedding function, `semantic` only), `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
-- size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
-- leak (computed by `analysis.report`, not stored): `excess_tokens`, mean prompt tokens per turn minus the oracle run's for the same model, task and hints
-- cache behavior: `stable_prefix_share`, `cache_breaks`
+- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
+- outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, API keys redacted)
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets`, `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
+- size and cost: `max_context_tokens`, `max_est_tokens`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `wall_s`
+- cache behaviour: `stable_prefix_share` (share of each prompt identical to the previous one), `cache_breaks`
+- computed by the analysis, not stored: `excess_tokens`, prompt tokens per turn above the oracle run on the same task
 
-Full transcripts and the final heap of each run are in `results/traces/<run_id>.json`. Neither `results/traces/` nor `.env` is committed.
+Full transcripts and the final heap of each run are in `results/traces/<run_id>.json`. Neither `results/` nor `.env` is committed.
 
 ## More
 
 - [SPEC.md](docs/SPEC.md): design, heap model, variables, stack.
-- [HYPOTHESES.md](docs/HYPOTHESES.md): what we test, and the roadmap.
-- [JOURNAL.md](docs/JOURNAL.md): dated observations.
+- [HYPOTHESES.md](docs/HYPOTHESES.md): what is tested, status of each hypothesis, roadmap.
+- [JOURNAL.md](docs/JOURNAL.md): dated observations per sweep.
+- [RELATED_WORK.md](docs/RELATED_WORK.md): papers and how they map onto this project.
+- [RESULTS.md](docs/RESULTS.md): generated table of every cell.
 
-Prior art:
-- [MemGPT](https://arxiv.org/abs/2310.08560)
-- [The Complexity Trap](https://arxiv.org/abs/2508.21433)
-- [Self-GC](https://arxiv.org/abs/2607.00692)
+Closest prior art: [MemGPT](https://arxiv.org/abs/2310.08560), [The Complexity Trap](https://arxiv.org/abs/2508.21433), [Self-GC](https://arxiv.org/abs/2607.00692).
