@@ -82,33 +82,33 @@ One run: the agent reads a folder of note files while a collector keeps its cont
 
 ```mermaid
 flowchart TD
-    S[cgc.agent sweep<br/>model x family x strategy x options x seed] --> T[task<br/>N note files, a few hold facts]
-    T --> H[(heap<br/>messages as objects)]
-    H --> C{context over<br/>threshold?}
-    C -- yes --> G[collector<br/>old messages become stubs]
+    S["cgc.agent sweep<br/>model x family x strategy x options x seed"] --> T["task<br/>N note files, a few hold facts"]
+    T --> H[("heap<br/>messages as objects")]
+    H --> C{"context over<br/>threshold?"}
+    C -- yes --> G["collector<br/>old messages become stubs"]
     C -- no --> O
-    G --> O{still over<br/>budget?}
-    O -- yes --> X[end: oom]
-    O -- no --> L[LLM call via LiteLLM]
-    L --> A{tool call?}
-    A -- list_files / read_file --> H
-    A -- "recall(id)" --> R[restore a stub] --> H
-    A -- text answer --> E[end: answered<br/>success = answer matches]
-    X --> W[(results/runs.jsonl<br/>results/traces/)]
+    G --> O{"still over<br/>budget?"}
+    O -- yes --> X["run stops: oom"]
+    O -- no --> L["LLM call via LiteLLM"]
+    L --> A{"tool call?"}
+    A -- "list_files / read_file" --> H
+    A -- "recall(id)" --> R["restore a stub"] --> H
+    A -- "text answer" --> E["run stops: answered<br/>success = answer matches"]
+    X --> W[("results/runs.jsonl<br/>results/traces/")]
     E --> W
-    W --> P[analysis: results / report / audit / timeline / tradeoff]
+    W --> P["analysis: results / report / audit / timeline / tradeoff"]
 ```
 
 What a collector sees: roots are always kept, the newest turn is protected, and a message is reachable when it shares a key with a reachable user or assistant message.
 
 ```mermaid
 flowchart LR
-    SYS[system prompt<br/>root]:::root
-    TASK[task<br/>root]:::root
-    A1[assistant: read notes/03.txt] --> R1[tool: notes/03.txt<br/>... ORION is 4821 ...]
-    A2[assistant: read notes/04.txt] --> R2[tool: notes/04.txt<br/>filler]
-    Q[question: code for ORION?<br/>root]:::root --> R1
-    NEW[newest turn<br/>protected]:::root
+    SYS["system prompt<br/>root"]:::root
+    TASK["task<br/>root"]:::root
+    A1["assistant: read notes/03.txt"] --> R1["tool: notes/03.txt<br/>... ORION is 4821 ..."]
+    A2["assistant: read notes/04.txt"] --> R2["tool: notes/04.txt<br/>filler"]
+    Q["question: code for ORION?<br/>root"]:::root --> R1
+    NEW["newest turn<br/>protected"]:::root
     R2:::dead
     A2:::dead
     classDef root fill:#dbeafe,stroke:#2563eb
