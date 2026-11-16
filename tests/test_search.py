@@ -20,12 +20,10 @@ def test_search_returns_the_collected_sentence_and_never_a_live_message(run_swee
     assert sweep.content(sweep.rows[0], 27) == "msg 15: The access code for project ORBITAL is 5242"
 
 
-def test_on_poison_search_surfaces_only_the_collected_revoked_code_and_the_live_correction_wins(run_sweep):
-    sweep = run_sweep("--family", "poison", "--strategies", "mark_sweep", "--hints", "none", "--search", "true")
-    row = sweep.rows[0]
+def test_on_poison_a_live_correction_is_answered_without_searching_the_collected_revoked_code(run_sweep):
+    row = run_sweep("--family", "poison", "--strategies", "mark_sweep", "--hints", "none", "--search", "true").rows[0]
 
-    assert (row["success"], row["answer"], row["searches"]) == (True, "1663", 1)
-    assert sweep.content(row, 27) == "msg 15: The access code for project ORION is 7890"
+    assert (row["success"], row["answer"], row["recalls"], row["searches"]) == (True, "1663", 0, 0)
 
 
 def test_search_finds_text_that_only_survives_in_a_summarized_original(run_sweep):
