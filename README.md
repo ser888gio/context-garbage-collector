@@ -61,15 +61,15 @@ These change what a stub carries, how the context is shown to the model, or when
 | `--positions` | Where the needle file sits in the reading order. | [Lost in the Middle](https://arxiv.org/abs/2307.03172) | Only 0.5 run so far. |
 | `--upfront true` | Ask the question with the task instead of at the end. | — | Not run on a real model. |
 
-## Planned, from other projects
+## From other projects
 
-Not built yet; each gets its own branch and a hypothesis in [docs/HYPOTHESES.md](docs/HYPOTHESES.md).
+Ideas taken from other context-management work. Each gets its own branch and a hypothesis in [docs/HYPOTHESES.md](docs/HYPOTHESES.md). Built features have no real-model results yet.
 
 | Feature | What it would do | Idea from | Status |
 |---|---|---|---|
-| `search` tool | Search the text of collected messages and return matching sentences, instead of restoring a whole message with `recall`. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | In progress |
-| Searchable summaries | Keep the original of every message `hybrid` summarized, so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | In progress |
-| Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Queued |
+| `search` tool (`--search true`) | Search the text of collected messages and return up to 5 matching sentences (`msg N: ...`), instead of restoring a whole message with `recall`. Live messages are not searched. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | Built, not yet run (H25-H27) |
+| Searchable summaries | Keep the original of the message `hybrid` overwrites with its summary (`archived` in the trace), so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | Built, not yet run (H28). Rarely matters here: the overwritten message is usually an assistant tool call with no text, and the summarized tool results were already searchable. |
+| Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | In progress |
 | `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Queued |
 | Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Queued |
 | `--hints summary` | Stub carries a one-line, model-written summary of the collected message. | Dynamic Context Loading (Moncef Abboud): model-written tool briefs | Idea |
@@ -135,9 +135,9 @@ The tests are end to end. They start a local OpenAI-compatible server backed by 
 ## What gets recorded
 
 One row per run in `results/runs.jsonl`:
-- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
+- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `search`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, API keys redacted)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets`, `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `searches`, `forgets`, `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
 - size and cost: `max_context_tokens`, `max_est_tokens`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `wall_s`
 - cache behaviour: `stable_prefix_share` (share of each prompt identical to the previous one), `cache_breaks`
 - computed by the analysis, not stored: `excess_tokens`, prompt tokens per turn above the oracle run on the same task

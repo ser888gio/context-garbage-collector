@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = ["litellm", "python-dotenv", "pandas", "matplotlib", "tabulate"]
 
 [project.optional-dependencies]
-test = ["pytest", "hypothesis"]
+test = ["pytest", "pytest-xdist", "hypothesis"]
 
 [tool.setuptools]
 packages = ["cgc", "analysis"]
@@ -13,3 +13,5 @@ packages = ["cgc", "analysis"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Each module runs its sweep once; loadscope keeps a module on one worker so the sweep is not repeated.
+addopts = "-n 4 --dist loadscope"
