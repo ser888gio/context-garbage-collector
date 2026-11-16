@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from cgc import collectors as C
-from cgc.tasks import BUILDERS, needle_task  # noqa: F401  (needle_task re-exported)
+from cgc.tasks import BUILDERS
 
 EMBED_MODEL = "gemini/gemini-embedding-001"
 RESULTS = Path("results")
@@ -277,6 +277,10 @@ def save(row, trace):
     (RESULTS / "traces" / f"{row['run_id']}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
 
 
+def cell_key(model, strategy, trigger, hints, pressure, coalesce, budget, task_id):
+    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, budget, task_id)
+
+
 def main():
     p = argparse.ArgumentParser(description="Sweep GC strategies over needle tasks. Resumable: finished cells are skipped.")
     p.add_argument("--models", default="openrouter/nvidia/nemotron-3.5-lightning:free")
@@ -298,7 +302,8 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    done = {(r["model"], r["strategy"], r["trigger"], C.stub_mode(r.get("hints", False)), r.get("pressure", False), r.get("coalesce", False), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
+                     r.get("coalesce", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
@@ -308,9 +313,9 @@ def main():
                                   [x == "true" for x in a.coalesce.split(",")])
         for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, a.budget, task["id"]) in done:
+            if cell_key(model, strategy, trigger, hints, pressure, coalesce, a.budget, task["id"]) in done:
                 continue
-            spent = sum(r["cost_usd"] for r in load_runs())
+            spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break

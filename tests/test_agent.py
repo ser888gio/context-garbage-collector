@@ -6,6 +6,7 @@ import pytest
 
 from cgc import agent
 from cgc import tasks
+from cgc.tasks import needle_task
 
 
 class FakeAgent:
@@ -68,7 +69,7 @@ class FakeHopAgent(FakeAgent):
 
 
 def run(strategy, budget, upfront=False, trigger="threshold:0.7"):
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=upfront)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=upfront)
     row, _ = agent.run(task, "fake/model", strategy, trigger, budget, FakeAgent(), max_turns=200)
     return row
 
@@ -105,17 +106,17 @@ def test_every_turn_trigger_collects_before_every_model_call():
 
 
 def test_needle_sits_in_the_file_at_the_requested_position():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
 
     assert [p for p, body in task["files"].items() if f"is {task['answer']}." in body] == ["notes/05.txt"]
 
 
 def test_same_seed_builds_the_same_task():
-    assert agent.needle_task(seed=3) == agent.needle_task(seed=3)
+    assert needle_task(seed=3) == needle_task(seed=3)
 
 
 def test_run_row_records_hints_setting():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
 
     row, _ = agent.run(task, "fake/model", "mark_sweep", "threshold:0.7", 4000, FakeAgent(), max_turns=200, hints=True)
 
@@ -123,7 +124,7 @@ def test_run_row_records_hints_setting():
 
 
 def test_run_row_records_tag():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
 
     row, _ = agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, FakeAgent(), max_turns=200, tag="sweep2")
 
@@ -189,7 +190,7 @@ class CallsMissingToolOnce(FakeAgent):
 
 
 def run_with(complete):
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
     return agent.run(task, "fake/model", "none", "threshold:0.7", 100_000, complete, max_turns=200)[0]
 
 
@@ -231,7 +232,7 @@ class Summarizing(FakeAgent):
 
 
 def test_hybrid_run_records_the_summary_calls_it_made():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
 
     row, _ = agent.run(task, "fake/model", "hybrid", "threshold:0.7", 4000, Summarizing(), max_turns=200)
 
@@ -274,7 +275,7 @@ class Forgetful(Hoarder):
 
 
 def run_manual(model, budget=4000, pressure=False):
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=True)
     return agent.run(task, "fake/model", "manual", "threshold:0.7", budget, model, max_turns=200, pressure=pressure)[0]
 
 
@@ -364,7 +365,7 @@ def test_poison_scoring_requires_the_new_code_and_rejects_the_revoked_one(answer
 
 
 def run_row(strategy, trigger, hints=False, upfront=False):
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=upfront)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=upfront)
     return agent.run(task, "fake/model", strategy, trigger, 4000, FakeAgent(), max_turns=200, hints=hints)[0]
 
 
@@ -422,7 +423,7 @@ def test_paraphrase_builder_is_deterministic_and_names_the_target_by_description
 
 
 def test_semantic_run_records_embed_calls():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=True)
     vocab = ["orion", "access", "code", "project"]
 
     def embed(texts):
@@ -460,7 +461,7 @@ def test_with_retry_does_not_retry_an_unrelated_exception():
 def test_embed_failure_in_the_collector_ends_that_run_as_api_error():
     def embed(texts):
         raise Exception("boom from embed")
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=True)
     row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
 
     assert row["end"] == "api_error"
@@ -470,14 +471,14 @@ def test_embed_failure_in_the_collector_ends_that_run_as_api_error():
 def test_api_key_in_an_error_url_is_redacted_from_the_stored_error():
     def embed(texts):
         raise Exception("400 for url https://x.test/v1:embed?key=SECRET123 failed")
-    task = agent.needle_task(seed=7, n_files=10, position=0.5, upfront=True)
+    task = needle_task(seed=7, n_files=10, position=0.5, upfront=True)
     row, _ = agent.run(task, "fake/model", "semantic", "every_turn", 4000, FakeAgent(), max_turns=200, embed=embed)
 
     assert row["error"] == "Exception: 400 for url https://x.test/v1:embed?key=REDACTED failed"
 
 
 def test_coalesce_run_shows_the_model_one_collected_message_and_records_the_flag():
-    task = agent.needle_task(seed=7, n_files=10, position=0.5)
+    task = needle_task(seed=7, n_files=10, position=0.5)
     seen, fake = [], FakeAgent()
 
     def spy(messages, tools):
