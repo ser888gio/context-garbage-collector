@@ -335,10 +335,8 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    rows = load_runs()
     done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
-                     r.get("coalesce", False), r["budget"], r["task_id"]) for r in rows}
-    spent = sum(r["cost_usd"] for r in rows)
+                     r.get("coalesce", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
@@ -350,6 +348,7 @@ def main():
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
             if cell_key(model, strategy, trigger, hints, pressure, coalesce, a.budget, task["id"]) in done:
                 continue
+            spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
@@ -360,7 +359,6 @@ def main():
                 print(f"  {model} still rate-limited, moving to next model")
                 break
             save(row, trace)
-            spent += row["cost_usd"]
             print(f"  -> {row['end']} success={row['success']} in={row['input_tokens']} recalls={row['recalls']}")
 
 
