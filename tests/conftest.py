@@ -29,7 +29,7 @@ class ScriptedAgent:
     FORGET_AT_PERCENT = 60
 
     def __init__(self):
-        self.requests, self.notes = 0, []
+        self.requests, self.notes, self.offered = 0, [], []
 
     def reply(self, messages, tools):
         self.requests += 1
@@ -37,11 +37,16 @@ class ScriptedAgent:
             facts = re.findall(r"(?:The|Correction: the) access code for project[^.]*\.", messages[1]["content"])
             return self.text("Summary: " + " ".join(facts))
 
+        self.offered.append((messages[0]["content"], sorted(t["function"]["name"] for t in tools or [])))
         calls = [c["function"] for m in messages if m["role"] == "assistant" for c in m.get("tool_calls") or []]
         stubs = [(int(i), path, rest) for m in messages if (m.get("content") or "").startswith("[collected")
                  for i, path, rest in STUB_ENTRY.findall(m["content"])]
         if not calls and not stubs:
-            return self.call("list_files", {})
+            call, finish = self.call("list_files", {})
+            upfront = QUESTION.search(messages[1]["content"])
+            if upfront and "search" in {t["function"]["name"] for t in tools or []}:
+                call["content"] = f"Listing the notes to find {upfront.group(1) and 'project ' + upfront.group(1) or 'the ' + upfront.group(2)}"
+            return call, finish
 
         last = messages[-1]
         usage = re.match(r"\[memory\] context (\d+)%", last["content"] if last["role"] == "user" else "")
@@ -73,6 +78,12 @@ class ScriptedAgent:
         wanted = asked.group(1) or names.get(asked.group(2))
         while wanted in alias:
             wanted = alias[wanted]
+
+        searched = {json.loads(c["arguments"])["query"] for c in calls if c["name"] == "search"}
+        query = wanted or asked.group(2)
+        offers_search = "search" in {t["function"]["name"] for t in tools or []}
+        if offers_search and query not in searched and (wanted is None or wanted not in code):
+            return self.call("search", {"query": query})
 
         recalled = {json.loads(c["arguments"])["id"] for c in calls if c["name"] == "recall"}
         if wanted is None:
@@ -149,6 +160,7 @@ class Sweep:
 
     def __init__(self, cwd, env, agent, proc, notes, argv):
         self.cwd, self.env, self.agent, self.proc, self.notes, self.argv = cwd, env, agent, proc, notes, argv
+        self.offered = []
 
     @property
     def rows(self):
@@ -196,10 +208,12 @@ def run_sweep(scripted):
     def run(*args, check=True):
         cwd = tmp_path_factory.mktemp("sweep")
         (cwd / "docs" / "img").mkdir(parents=True)
-        start = len(agent.notes)
+        start, start_offered = len(agent.notes), len(agent.offered)
         argv = ["cgc.agent", "--models", "openai/scripted-agent", "--seeds", "0", "--n-files", "10",
                 "--budget", "4000", "--max-cost", "1", *args]
         proc = cli(cwd, env, *argv, check=check)
-        return Sweep(cwd, env, agent, proc, agent.notes[start:], argv)
+        sweep = Sweep(cwd, env, agent, proc, agent.notes[start:], argv)
+        sweep.offered = agent.offered[start_offered:]
+        return sweep
 
     return run
