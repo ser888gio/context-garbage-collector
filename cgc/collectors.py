@@ -24,6 +24,7 @@ class Obj:
     survived: int = 0
     # Without this, the summary message (still live and collectable) would be re-summarized every GC run.
     summarized: bool = False
+    archived: str | None = None
     stub_keys: list[str] | None = None
     stub_tail: str = ""
 
@@ -188,6 +189,8 @@ def hybrid(heap, st):
     summary = st["summarize"]([f"{o.msg['role']}: {text(o)}" for o in old])
     for o in old[1:]:
         kill(o, st.get("hints", False))
+    if old[0].archived is None:
+        old[0].archived = old[0].original
     old[0].msg["content"] = f"[summary of msgs {old[0].id}-{old[-1].id}] {summary}"
     old[0].summarized = True
     return out + [o.id for o in old[1:]]
@@ -231,15 +234,32 @@ def mark_sweep_chain(heap, st):
 CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b")
 
 
+SENTENCE_RE = re.compile(r"[.!?](?:\s|$)|[;\n]")
+
+
 def facts(o):
     # A clause (split on . ; newline) with one CAPS key asserts its LAST 4+ digit number. Splitting on ";"
     # keeps "ORION is now 7310; the old code 4821 is revoked" as ORION = 7310, not the revoked 4821.
     out = {}
-    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.original):
+    for sentence in SENTENCE_RE.split(o.original):
         caps, nums = set(CAPS_RE.findall(sentence)), NUM_RE.findall(sentence)
         if len(caps) == 1 and nums:
             out[caps.pop()] = nums[-1]
     return out
+
+
+NO_MATCH = "no matches in collected messages"
+
+
+def search(heap, query, limit=5):
+    terms = query.lower().split()
+    lines = []
+    for o in heap:
+        for hidden in (o.saved if o.dead else None, o.archived):
+            for sentence in SENTENCE_RE.split(hidden or ""):
+                if terms and all(t in sentence.lower() for t in terms):
+                    lines.append(f"msg {o.id}: {sentence.strip()[:200]}")
+    return "\n".join(lines[:limit]) or NO_MATCH
 
 
 def write_barrier(heap, st):

@@ -94,6 +94,8 @@ python -m analysis.report
 
 `--hints` sets what a collected stub carries: `false`/`none` (nothing), `true`/`keys` (keys of the collected message), `preview` (keys + first 12 words), `numbers` (keys + every 4+ digit number), `fresh`, `pointer`. Rows store the mode name; an unknown value is rejected up front. `--triggers threshold:P:T` collects when context exceeds P of the budget and then down to T of it (hysteresis, e.g. `threshold:0.7:0.4`); `threshold:P` is unchanged. For `mark_sweep`, `refcount`, `generational` and `write_barrier`, hysteresis also collects the oldest reachable tool results until the target is met.
 
+`--search true` (or `true,false` as a sweep) gives the agent a `search(query)` tool and one extra system-prompt sentence. It returns up to 5 sentences (`msg N: ...`) of collected text that contain every query word, case-insensitively, without restoring anything. It sees the saved original of collected messages and, for `hybrid`, the original of the message a summary overwrote (`archived` in the trace heap). Live messages are not searched. Old rows without the field count as `search=false` when resuming.
+
 The sweep is resumable: finished cells are skipped. Run `python -m cgc.agent --help` for all flags (positions, upfront question, stub hints, budget, number of files, ...). `--pressure true` (or `true,false` as a sweep) appends an ephemeral `[memory] context 82% of budget ...` note to each model call; it is never stored in the heap. `--max-cost` is a USD cap over everything in `results/runs.jsonl`; the default of 0 blocks paid models.
 
 ## Long runs
@@ -115,9 +117,9 @@ Inspect runs:
 ## What gets recorded
 
 One row per run in `results/runs.jsonl`:
-- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `budget`, `task_family`, `task_id`, `provider`, `model`
+- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `search`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, else empty)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `forgets` (messages the model freed with `forget`), `summary_calls`, `embed_calls` (calls to the embedding function, `semantic` only), `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `searches` (calls to `search`), `forgets` (messages the model freed with `forget`), `summary_calls`, `embed_calls` (calls to the embedding function, `semantic` only), `repeated_calls`, `unknown_tool_calls` (calls to a tool not in the request)
 - size and cost: `max_context_tokens`, `max_est_tokens`, token counts, `cost_usd`, `wall_s`
 - leak (computed by `analysis.report`, not stored): `excess_tokens`, mean prompt tokens per turn minus the oracle run's for the same model, task and hints
 - cache behavior: `stable_prefix_share`, `cache_breaks`

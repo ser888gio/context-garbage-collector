@@ -28,6 +28,11 @@ TOOLS = [
                                       "parameters": {"type": "object", "properties": {"id": {"type": "integer"}},
                                                      "required": ["id"]}}},
 ]
+SEARCH_TOOL = {"type": "function", "function": {
+    "name": "search", "description": "Search the text of collected messages without restoring them. "
+                                     "Returns matching sentences with their message ids.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
+SEARCH_SENTENCE = " You can call search(query) to find text in collected messages without restoring them."
 FORGET_TOOL = {"type": "function", "function": {
     "name": "forget", "description": "Free memory: collect old messages by id (tool results show [msg N]). "
                                      "The system prompt, task and newest turn are refused.",
@@ -62,6 +67,8 @@ def call_tool(name, args, task, heap, turn):
         return task["files"].get(args.get("path", ""), f"error: no file {args.get('path')!r}")
     if name == "recall":
         return "restored" if C.restore(heap, int(args.get("id", -1)), turn) else "error: nothing to restore"
+    if name == "search":
+        return C.search(heap, str(args.get("query", "")))
     return f"error: unknown tool {name}"
 
 
@@ -116,26 +123,27 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
            "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
     trace = {"row": row, "events": events,
              "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
-                       "label": o.label, "msg": o.msg, "saved": o.saved} for o in heap]}
+                       "label": o.label, "msg": o.msg, "saved": o.saved,
+                       "archived": o.archived} for o in heap]}
     return row, trace
 
 
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
-        embed=None, coalesce=False):
+        embed=None, coalesce=False, search=False):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label=""):
         heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, touched=turn, last_used=turn))
         return heap[-1]
 
-    add({"role": "system", "content": SYSTEM}, 0, root=True)
+    add({"role": "system", "content": SYSTEM + SEARCH_SENTENCE * search}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     threshold, target = parse_trigger(trigger)
     st = {"budget": budget, "hints": hints, "threshold": threshold}
     if target is not None:
         st["target"] = target
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
+             recalls=0, searches=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
              max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
@@ -160,7 +168,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
     error = ""
     manual = strategy == "manual"
-    tools = TOOLS + [FORGET_TOOL] * manual
+    tools = TOOLS + [FORGET_TOOL] * manual + [SEARCH_TOOL] * search
     known = {t["function"]["name"] for t in tools}
 
     def handle_call(c, turn):
@@ -173,6 +181,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             s["unknown_tool_calls"] += 1
         if c.function.name == "recall":
             s["recalls"] += 1
+        elif c.function.name == "search" and search:
+            s["searches"] += 1
         elif sig in seen_calls:
             s["repeated_calls"] += 1
         seen_calls.add(sig)
@@ -240,7 +250,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         for c in calls:
             handle_call(c, turn)
 
-    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, tag=tag,
+    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, tag=tag,
                budget=budget)
     return build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0)
 
@@ -306,8 +316,8 @@ def save(row, trace):
     (RESULTS / "traces" / f"{row['run_id']}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
 
 
-def cell_key(model, strategy, trigger, hints, pressure, coalesce, budget, task_id):
-    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, budget, task_id)
+def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, budget, task_id):
+    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, budget, task_id)
 
 
 def main():
@@ -322,6 +332,7 @@ def main():
     p.add_argument("--hints", default="false", help="comma list of false/true/none/keys/preview/numbers/fresh/pointer: what collected stubs carry (false=none, true=keys)")
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--coalesce", default="false", help="comma list of true/false: render runs of collected tool results as one message")
+    p.add_argument("--search", default="false", help="comma list of true/false: offer a search tool over collected messages")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
@@ -333,33 +344,37 @@ def main():
     except KeyError as e:
         p.error(f"unknown --hints value {e.args[0]!r}; choose from {', '.join(k for k in C.MODES if isinstance(k, str))}")
 
+    search_modes = a.search.split(",")
+    if not set(search_modes) <= {"true", "false"}:
+        p.error(f"unknown --search value in {a.search!r}; choose from true, false")
+
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
-                     r.get("coalesce", False), r["budget"], r["task_id"]) for r in load_runs()}
+                     r.get("coalesce", False), r.get("search", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
                                   hint_modes, [x == "true" for x in a.pressure.split(",")],
-                                  [x == "true" for x in a.coalesce.split(",")])
-        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce in cells:
+                                  [x == "true" for x in a.coalesce.split(",")], [x == "true" for x in search_modes])
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if cell_key(model, strategy, trigger, hints, pressure, coalesce, a.budget, task["id"]) in done:
+            if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} search={search} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce, search=search)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break
             save(row, trace)
-            print(f"  -> {row['end']} success={row['success']} in={row['input_tokens']} recalls={row['recalls']}")
+            print(f"  -> {row['end']} success={row['success']} in={row['input_tokens']} recalls={row['recalls']} searches={row['searches']}")
 
 
 if __name__ == "__main__":

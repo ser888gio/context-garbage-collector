@@ -30,6 +30,10 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H22 | Following chains through rare keys (mark_sweep_chain) recovers multihop success at mark-sweep's cost. | `--family multihop`: success, recalls, tokens of mark_sweep_chain vs mark_sweep/lru_mask. | open |
 | H23 | On paraphrase tasks semantic relevance beats regex reachability (mark_sweep). | `--family paraphrase`: success, recalls of `semantic` vs `mark_sweep`. | open |
 | H24 | Semantic selection changes between calls and breaks the prompt cache more often than mark_sweep. | `cache_breaks`, `stable_prefix_share` of `semantic` vs `mark_sweep`. | open |
+| H25 | Searching collected text instead of restoring whole messages recovers the needle without stub hints. | `--hints none --search true,false` on needle: success, recalls, searches, tokens. | open |
+| H26 | Search lowers the cost of recovery versus recall. | Input tokens of search runs vs keys-hints recall runs at equal success. | open |
+| H27 | On poison, search surfaces the correction next to the revoked code and raises success. | `--family poison --search true,false`: success. | open |
+| H28 | Keeping summarized originals searchable fixes hybrid's lossy summaries. | `hybrid` with vs without `--search true` on multihop and poison: success. | open |
 
 ## Roadmap
 
