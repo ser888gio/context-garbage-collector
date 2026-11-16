@@ -24,6 +24,8 @@ class Obj:
     survived: int = 0
     # Without this, the summary message (still live and collectable) would be re-summarized every GC run.
     summarized: bool = False
+    stub_keys: list[str] | None = None
+    stub_tail: str = ""
 
     @property
     def original(self):
@@ -82,22 +84,31 @@ def stub_mode(hints):
     return MODES[hints]
 
 
+def format_stub(o, found, tail, inner=False):
+    what = f"msg {o.id} {o.label}".strip()
+    what += f" — keys: {', '.join(found)}" if found else ""
+    what += tail
+    return what if inner else f"[collected: {what}; call recall({o.id}) to restore]"
+
+
 def kill(o, hints=False):
     mode = stub_mode(hints)
     o.dead = True
     content = o.msg.get("content")
-    what = f"msg {o.id} {o.label}".strip()
     found = sorted(k for k in keys(o) if k not in o.label)[:6] if mode != "none" else []
-    what += f" — keys: {', '.join(found)}" if found else ""
+    tail = ""
     if mode == "numbers" and content:
         nums = list(dict.fromkeys(NUM_RE.findall(content)))
-        what += f" — numbers: {', '.join(nums)}" if nums else ""
+        tail += f" — numbers: {', '.join(nums)}" if nums else ""
     if mode == "preview" and content:
-        what += f' — preview: "{" ".join(content.split()[:12])}"'
-    stub = f"[collected: {what}; call recall({o.id}) to restore]"
+        tail += f' — preview: "{" ".join(content.split()[:12])}"'
+    stub = format_stub(o, found, tail)
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
         o.msg["content"] = stub
+        # Re-split on ", " so a quoted key containing a comma refreshes as two items, as the old regex edit did.
+        o.stub_keys = ", ".join(found).split(", ") if found else []
+        o.stub_tail = tail
 
 
 def kill_all(objs, st):
@@ -111,6 +122,7 @@ def restore(heap, obj_id, t):
     if o is None or o.saved is None:
         return False
     o.msg["content"], o.saved, o.dead = o.saved, None, False
+    o.stub_keys, o.stub_tail = None, ""
     o.touched = o.last_used = t
     return True
 
@@ -344,21 +356,19 @@ def refresh_stubs(heap, pointers=False):
             seen.setdefault(k, set()).add(v)
     gone = {v for k, vs in seen.items() for v in vs if v != latest[k]}
     for o in heap:
-        if not (o.dead and o.saved):
+        if not (o.dead and o.saved and o.stub_keys is not None):
             continue
         stale = {k: latest_id[k] for k, v in facts(o).items() if v != latest[k]} if pointers else {}
         if not (gone or stale):
             continue
-        m = re.search(r"( — keys: (.*?))?(?=; call recall\()", o.msg["content"])
-        if not m:
-            continue
         # Strip old pointers first so reruns stay idempotent and follow newer corrections.
-        items = [re.sub(r" \(superseded by msg \d+\)$", "", k) for k in (m.group(2) or "").split(", ") if k]
+        items = [re.sub(r" \(superseded by msg \d+\)$", "", k) for k in o.stub_keys if k]
         items = [k for k in items if k not in gone]
         for k, n in stale.items():
             note = f"{k} (superseded by msg {n})"
             items = [note if i == k else i for i in items] if k in items else items + [note]
-        o.msg["content"] = o.msg["content"].replace(m.group(0), f" — keys: {', '.join(items)}" if items else "", 1)
+        o.stub_keys = items
+        o.msg["content"] = format_stub(o, items, o.stub_tail)
 
 
 def collect(strategy, heap, st):
@@ -371,7 +381,7 @@ def collect(strategy, heap, st):
 def dead_stub_pair(a, r):
     calls = a.msg.get("tool_calls") or []
     return (a.dead and len(calls) == 1 and not a.msg.get("content") and r.dead and r.msg.get("role") == "tool"
-            and (r.msg.get("content") or "").startswith("[collected:"))
+            and r.stub_keys is not None)
 
 
 def render(heap, coalesce):
@@ -388,7 +398,8 @@ def render(heap, coalesce):
 
     while i < len(heap):
         if i + 1 < len(heap) and dead_stub_pair(heap[i], heap[i + 1]):
-            entries.append(heap[i + 1].msg["content"].removeprefix("[collected: ").split("; call recall(")[0])
+            r = heap[i + 1]
+            entries.append(format_stub(r, r.stub_keys, r.stub_tail, inner=True))
             i += 2
         else:
             flush()
