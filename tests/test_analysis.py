@@ -25,12 +25,12 @@ def test_report_prints_one_row_per_strategy_with_success_oom_and_tokens(reported
     out = reported.cli("analysis.report").stdout
 
     assert [cells(line) for line in out.splitlines()[2:]] == [
-        ["openai/scripted-agent", "mark_sweep", "threshold:0.7", "1", "1.00", "0", "22762.00", "0.00", "1.00",
-         "-108.14", "2722.00"],
-        ["openai/scripted-agent", "none", "threshold:0.7", "1", "0.00", "1", "9414.00", "0.00", "0.00",
-         "-389.14", "4425.00"],
-        ["openai/scripted-agent", "oracle", "threshold:0.7", "1", "1.00", "0", "22542.00", "0.00", "0.00",
-         "0.00", "2722.00"]]
+        ["openai/scripted-agent", "mark_sweep", "threshold:0.7", "1", "1.00", "0", "22738.00", "0.00", "1.00",
+         "-108.16", "2720.00"],
+        ["openai/scripted-agent", "none", "threshold:0.7", "1", "0.00", "1", "9406.00", "0.00", "0.00",
+         "-388.59", "4423.00"],
+        ["openai/scripted-agent", "oracle", "threshold:0.7", "1", "1.00", "0", "22520.00", "0.00", "0.00",
+         "0.00", "2720.00"]]
 
 
 def test_report_writes_the_success_vs_tokens_plot(reported):
@@ -39,10 +39,13 @@ def test_report_writes_the_success_vs_tokens_plot(reported):
     assert (reported.cwd / "results" / "success_vs_tokens.png").read_bytes()[:8] == PNG
 
 
-def test_tradeoff_lists_each_point_that_has_at_least_eight_runs(tradeoff):
+def test_tradeoff_lists_keys_and_pointer_coalesce_points_with_eight_runs(tradeoff):
     out = tradeoff.cli("analysis.tradeoff", "results/runs.jsonl").stdout
 
-    assert [line.split() for line in out.splitlines()] == []
+    assert [line.split()[1:] for line in out.splitlines()[1:]] == [
+        ["needle", "mark_sweep", "keys", "8", "1.0", "22808.25", "0"],
+        ["needle", "mark_sweep", "pointer+coalesce", "8", "1.0", "19487.00", "0"],
+        ["needle", "oracle", "keys", "8", "1.0", "22580.62", "0"]]
 
 
 def test_tradeoff_writes_its_plot(tradeoff):

@@ -36,7 +36,7 @@ def test_coalescing_shrinks_the_prompts_sent_to_the_model(coalescing):
     coalesced = coalescing.row(task_family="needle", coalesce=True)
     plain = coalescing.row(task_family="needle", coalesce=False)
 
-    assert (coalesced["input_tokens"], plain["input_tokens"]) == (19584, 22939)
+    assert (coalesced["input_tokens"], plain["input_tokens"]) == (19551, 22872)
 
 
 def test_coalescing_changes_what_the_model_is_sent_not_what_is_collected(coalescing):
