@@ -13,7 +13,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 QUESTION = re.compile(r"What is the access code for (?:project (\w+)|the (.+?) project)\?")
-STUB_ENTRY = re.compile(r"msg (\d+) read_file (\S+)([^;\]]*)")
+STUB_ENTRY = re.compile(r"msg (\d+) read_file (notes/\d+\.txt)([^;\]]*)")
 SUMMARIZE = "Summarize the conversation excerpt"
 LEAKY_URL = "https://upstream.invalid/v1/models/m:generate?key=SECRET-KEY-123&alt=json"
 
@@ -29,10 +29,11 @@ class ScriptedAgent:
     FORGET_AT_PERCENT = 60
 
     def __init__(self):
-        self.requests, self.notes = 0, []
+        self.requests, self.notes, self.context_size = 0, [], 0
 
     def reply(self, messages, tools):
         self.requests += 1
+        self.context_size = len(messages)
         if messages[0]["content"].startswith(SUMMARIZE):
             facts = re.findall(r"(?:The|Correction: the) access code for project[^.]*\.", messages[1]["content"])
             return self.text("Summary: " + " ".join(facts))
@@ -40,13 +41,12 @@ class ScriptedAgent:
         calls = [c["function"] for m in messages if m["role"] == "assistant" for c in m.get("tool_calls") or []]
         stubs = [(int(i), path, rest) for m in messages if (m.get("content") or "").startswith("[collected")
                  for i, path, rest in STUB_ENTRY.findall(m["content"])]
-        if not calls and not stubs:
-            return self.call("list_files", {})
-
         last = messages[-1]
         usage = re.match(r"\[memory\] context (\d+)%", last["content"] if last["role"] == "user" else "")
         if usage:
             self.notes.append(last["content"])
+        if not calls and not stubs:
+            return self.call("list_files", {})
 
         read = {json.loads(c["arguments"]).get("path") for c in calls if c["name"] == "read_file"}
         read |= {path for _, path, _ in stubs}
@@ -74,6 +74,9 @@ class ScriptedAgent:
         while wanted in alias:
             wanted = alias[wanted]
 
+        if wanted in corrected:
+            return self.text(corrected[wanted])
+
         recalled = {json.loads(c["arguments"])["id"] for c in calls if c["name"] == "recall"}
         if wanted is None:
             targets = [i for i, _, rest in stubs
@@ -89,7 +92,7 @@ class ScriptedAgent:
         return self.text(answer or "I don't know")
 
     def call(self, name, args):
-        tool_call = {"id": f"call_{self.requests}", "type": "function",
+        tool_call = {"id": f"call_{self.context_size}", "type": "function",
                      "function": {"name": name, "arguments": json.dumps(args)}}
         return {"role": "assistant", "content": None, "tool_calls": [tool_call]}, "tool_calls"
 
@@ -163,6 +166,9 @@ class Sweep:
     def trace(self, row):
         return json.loads((self.cwd / "results" / "traces" / f"{row['run_id']}.json").read_text(encoding="utf-8"))
 
+    def trace_text(self, row):
+        return (self.cwd / "results" / "traces" / f"{row['run_id']}.json").read_text(encoding="utf-8")
+
     def content(self, row, msg_id):
         return next(o["msg"]["content"] for o in self.trace(row)["heap"] if o["id"] == msg_id)
 
@@ -190,12 +196,13 @@ def scripted(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def run_sweep(scripted):
-    """run_sweep(*cli_args) -> Sweep. Defaults: scripted model, seed 0, 10 files, budget 4000; later flags win."""
+    """run_sweep(*cli_args, into=None) -> Sweep. Defaults: scripted model, seed 0, 10 files, budget 4000; later
+    flags win. `into=<Sweep>` appends to that sweep's results directory instead of starting a new one."""
     agent, env, tmp_path_factory = scripted
 
-    def run(*args, check=True):
-        cwd = tmp_path_factory.mktemp("sweep")
-        (cwd / "docs" / "img").mkdir(parents=True)
+    def run(*args, check=True, into=None):
+        cwd = into.cwd if into else tmp_path_factory.mktemp("sweep")
+        (cwd / "docs" / "img").mkdir(parents=True, exist_ok=True)
         start = len(agent.notes)
         argv = ["cgc.agent", "--models", "openai/scripted-agent", "--seeds", "0", "--n-files", "10",
                 "--budget", "4000", "--max-cost", "1", *args]
