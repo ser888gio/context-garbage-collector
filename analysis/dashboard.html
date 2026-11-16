@@ -23,6 +23,7 @@ th{background:var(--hi)}td.n{text-align:right;font-variant-numeric:tabular-nums}
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const mode = h => h === true ? "keys" : h || "none";
 const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
 const table = (head, rows) => "<tr>" + head.map(h => `<th>${h}</th>`).join("") + "</tr>" +
   rows.map(r => "<tr>" + r.map(c => `<td class="${typeof c == "number" ? "n" : ""}">${c}</td>`).join("") + "</tr>").join("");
@@ -30,14 +31,14 @@ const table = (head, rows) => "<tr>" + head.map(h => `<th>${h}</th>`).join("") +
 function render(rows) {
   $("sum").textContent = `${rows.length} runs, $${rows.reduce((s, r) => s + (r.cost_usd || 0), 0).toFixed(4)} total cost`;
   const g = {};
-  for (const r of rows) (g[[r.model, r.strategy, !!r.hints]] ||= []).push(r);
+  for (const r of rows) (g[[r.model, r.strategy, mode(r.hints)]] ||= []).push(r);
   const agg = Object.entries(g).sort().map(([k, v]) => {
     const [m, s, h] = k.split(",");
     return [esc(m), esc(s), h, v.length, Math.round(100 * v.filter(r => r.success).length / v.length) + "%",
             v.filter(r => r.end == "oom").length, Math.round(mean(v.map(r => r.input_tokens || 0)))];
   });
   $("agg").innerHTML = table(["model", "strategy", "hints", "runs", "success", "oom", "mean input tokens"], agg);
-  const last = rows.slice(-15).reverse().map(r => [esc(r.ts), esc(r.model), esc(r.strategy), !!r.hints, esc(r.task_id),
+  const last = rows.slice(-15).reverse().map(r => [esc(r.ts), esc(r.model), esc(r.strategy), esc(mode(r.hints)), esc(r.task_id),
     `<span class="${r.success ? "ok" : "bad"}">${r.success ? "success" : "fail"}</span> (${esc(r.end)})`, r.input_tokens, r.cost_usd]);
   $("last").innerHTML = table(["ts", "model", "strategy", "hints", "task", "outcome", "input tokens", "cost $"], last);
 }
