@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 # ponytail: regex keys (paths, URLs, CAPS names, 4+ digit numbers, short quotes); swap for an LLM/embedding linker as its own strategy
 KEY_RE = re.compile(r'https?://\S+|[\w./-]+\.\w{1,5}\b|\b[A-Z][A-Z0-9_-]{2,}\b|\b\d{4,}\b|"[^"]{3,40}"')
+NUM_RE = re.compile(r"\b\d{4,}\b")
+MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
+         "preview": "preview", "numbers": "numbers", "fresh": "fresh", "pointer": "pointer"}
 
 
 @dataclass
@@ -21,6 +24,12 @@ class Obj:
     survived: int = 0
     # Without this, the summary message (still live and collectable) would be re-summarized every GC run.
     summarized: bool = False
+    stub_keys: list[str] | None = None
+    stub_tail: str = ""
+
+    @property
+    def original(self):
+        return self.saved if self.saved is not None else self.msg.get("content") or ""
 
     @property
     def live(self):
@@ -71,31 +80,41 @@ def collectable(heap):
     t = now(heap)
     return [o for o in heap if o.live and not protected(o, t)]
 
-NUM_RE = re.compile(r"\b\d{4,}\b")
-MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
-         "preview": "preview", "numbers": "numbers", "fresh": "fresh", "pointer": "pointer"}
-
-
 def stub_mode(hints):
     return MODES[hints]
+
+
+def format_stub(o, found, tail, inner=False):
+    what = f"msg {o.id} {o.label}".strip()
+    what += f" — keys: {', '.join(found)}" if found else ""
+    what += tail
+    return what if inner else f"[collected: {what}; call recall({o.id}) to restore]"
 
 
 def kill(o, hints=False):
     mode = stub_mode(hints)
     o.dead = True
     content = o.msg.get("content")
-    what = f"msg {o.id} {o.label}".strip()
     found = sorted(k for k in keys(o) if k not in o.label)[:6] if mode != "none" else []
-    what += f" — keys: {', '.join(found)}" if found else ""
+    tail = ""
     if mode == "numbers" and content:
         nums = list(dict.fromkeys(NUM_RE.findall(content)))
-        what += f" — numbers: {', '.join(nums)}" if nums else ""
+        tail += f" — numbers: {', '.join(nums)}" if nums else ""
     if mode == "preview" and content:
-        what += f' — preview: "{" ".join(content.split()[:12])}"'
-    stub = f"[collected: {what}; call recall({o.id}) to restore]"
+        tail += f' — preview: "{" ".join(content.split()[:12])}"'
+    stub = format_stub(o, found, tail)
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
         o.msg["content"] = stub
+        # Re-split on ", " so a quoted key containing a comma refreshes as two items, as the old regex edit did.
+        o.stub_keys = ", ".join(found).split(", ") if found else []
+        o.stub_tail = tail
+
+
+def kill_all(objs, st):
+    for o in objs:
+        kill(o, st.get("hints", False))
+    return [o.id for o in objs]
 
 
 def restore(heap, obj_id, t):
@@ -103,6 +122,7 @@ def restore(heap, obj_id, t):
     if o is None or o.saved is None:
         return False
     o.msg["content"], o.saved, o.dead = o.saved, None, False
+    o.stub_keys, o.stub_tail = None, ""
     o.touched = o.last_used = t
     return True
 
@@ -142,23 +162,20 @@ def truncate(heap, st):
 def lru_mask(heap, st):
     t = now(heap)
     users = [o for o in heap if o.live and o.msg["role"] == "assistant"]
+    user_keys = {u.id: keys(u) for u in users}
     for o in heap:
         ko = keys(o)
         for u in users:
-            if u.turn > o.last_used and ko & keys(u):
+            if u.turn > o.last_used and ko & user_keys[u.id]:
                 o.last_used = u.turn
     out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.last_used >= st.get("lru_turns", 3)]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def mask(heap, st):
     t = now(heap)
     out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.turn >= st.get("mask_turns", 3)]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def hybrid(heap, st):
@@ -179,11 +196,11 @@ def hybrid(heap, st):
 def refcount(heap, st):
     t = now(heap)
     out = []
+    k = {o.id: keys(o) for o in heap if o.live}
     changed = True
     while changed:
         changed = False
         live = [o for o in heap if o.live]
-        k = {o.id: keys(o) for o in live}
         for o in live:
             if protected(o, t):
                 continue
@@ -195,23 +212,20 @@ def refcount(heap, st):
     return out
 
 
+def sweep_unreachable(heap, st, **reach):
+    seen = reachable(heap, **reach)
+    return kill_all([o for o in collectable(heap) if o.id not in seen], st)
+
+
 def mark_sweep(heap, st):
-    seen = reachable(heap)
-    out = [o for o in collectable(heap) if o.id not in seen]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return sweep_unreachable(heap, st)
 
 
 def mark_sweep_chain(heap, st):
     # A reached tool result also propagates, but only if it has at most chain_max_refs keys. A link or value
     # file carries ~3 (name, name, path); a list_files result carries one path per file, so it stays a leaf.
     # A per-key fanout guard cannot do this: every path appears in exactly 3 messages (listing, call, result).
-    seen = reachable(heap, chain_max_keys=st.get("chain_max_refs", 3))
-    out = [o for o in collectable(heap) if o.id not in seen]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return sweep_unreachable(heap, st, chain_max_keys=st.get("chain_max_refs", 3))
 
 
 CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b")
@@ -221,7 +235,7 @@ def facts(o):
     # A clause (split on . ; newline) with one CAPS key asserts its LAST 4+ digit number. Splitting on ";"
     # keeps "ORION is now 7310; the old code 4821 is revoked" as ORION = 7310, not the revoked 4821.
     out = {}
-    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.saved or o.msg.get("content") or ""):
+    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.original):
         caps, nums = set(CAPS_RE.findall(sentence)), NUM_RE.findall(sentence)
         if len(caps) == 1 and nums:
             out[caps.pop()] = nums[-1]
@@ -233,9 +247,7 @@ def write_barrier(heap, st):
     f = {o.id: facts(o) for o in live}
     stale = [o for o in collectable(heap)
              if any(f[p.id].get(k, v) != v for p in live if p.id > o.id for k, v in f[o.id].items())]
-    for o in stale:
-        kill(o, st.get("hints", False))
-    return [o.id for o in stale] + mark_sweep(heap, st)
+    return kill_all(stale, st) + mark_sweep(heap, st)
 
 
 def generational(heap, st):
@@ -250,8 +262,7 @@ def generational(heap, st):
         else:
             kill(o, st.get("hints", False))
             out.append(o.id)
-    st["major"] = size(heap) > st["budget"] * st.get("threshold", 0.7)
-    if st["major"]:
+    if size(heap) > st["budget"] * st.get("threshold", 0.7):
         out += mark_sweep(heap, st)
     return out
 
@@ -267,9 +278,7 @@ def h2o(heap, st):
     heavy = sorted((o for o in pool if o.msg["role"] == "tool" and refs[o.id]), key=lambda o: (-refs[o.id], o.id))
     keep = {o.id for o in heavy[:st.get("h2o_heavy", 4)]}
     out = [o for o in pool if o.id not in keep]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def forget(heap, ids, hints=False):
@@ -288,10 +297,8 @@ def forget(heap, ids, hints=False):
 
 def oracle(heap, st):
     out = [o for o in collectable(heap)
-           if not any(k in (o.saved if o.saved is not None else o.msg.get("content") or "") for k in st.get("oracle_keys", ()))]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+           if not any(k in o.original for k in st.get("oracle_keys", ()))]
+    return kill_all(out, st)
 
 
 def cosine(a, b):
@@ -313,9 +320,7 @@ def semantic(heap, st):
     centre = [sum(col) for col in zip(*roots)] if roots else []
     ranked = sorted(pool, key=lambda o: (-cosine(vec[o.id], centre), o.id))
     out = ranked[st.get("semantic_k", 4):]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def with_target(fn):
@@ -351,21 +356,19 @@ def refresh_stubs(heap, pointers=False):
             seen.setdefault(k, set()).add(v)
     gone = {v for k, vs in seen.items() for v in vs if v != latest[k]}
     for o in heap:
-        if not (o.dead and o.saved):
+        if not (o.dead and o.saved and o.stub_keys is not None):
             continue
         stale = {k: latest_id[k] for k, v in facts(o).items() if v != latest[k]} if pointers else {}
         if not (gone or stale):
             continue
-        m = re.search(r"( — keys: (.*?))?(?=; call recall\()", o.msg["content"])
-        if not m:
-            continue
         # Strip old pointers first so reruns stay idempotent and follow newer corrections.
-        items = [re.sub(r" \(superseded by msg \d+\)$", "", k) for k in (m.group(2) or "").split(", ") if k]
+        items = [re.sub(r" \(superseded by msg \d+\)$", "", k) for k in o.stub_keys if k]
         items = [k for k in items if k not in gone]
         for k, n in stale.items():
             note = f"{k} (superseded by msg {n})"
             items = [note if i == k else i for i in items] if k in items else items + [note]
-        o.msg["content"] = o.msg["content"].replace(m.group(0), f" — keys: {', '.join(items)}" if items else "", 1)
+        o.stub_keys = items
+        o.msg["content"] = format_stub(o, items, o.stub_tail)
 
 
 def collect(strategy, heap, st):
@@ -378,7 +381,7 @@ def collect(strategy, heap, st):
 def dead_stub_pair(a, r):
     calls = a.msg.get("tool_calls") or []
     return (a.dead and len(calls) == 1 and not a.msg.get("content") and r.dead and r.msg.get("role") == "tool"
-            and (r.msg.get("content") or "").startswith("[collected:"))
+            and r.stub_keys is not None)
 
 
 def render(heap, coalesce):
@@ -395,7 +398,8 @@ def render(heap, coalesce):
 
     while i < len(heap):
         if i + 1 < len(heap) and dead_stub_pair(heap[i], heap[i + 1]):
-            entries.append(heap[i + 1].msg["content"].removeprefix("[collected: ").split("; call recall(")[0])
+            r = heap[i + 1]
+            entries.append(format_stub(r, r.stub_keys, r.stub_tail, inner=True))
             i += 2
         else:
             flush()
