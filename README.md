@@ -80,42 +80,13 @@ The DCP plugin is AGPL-3.0; only its ideas are reimplemented here, no code is co
 
 One run: the agent reads a folder of note files while a collector keeps its context under a token budget, then answers a question.
 
-```mermaid
-flowchart TD
-    S["cgc.agent sweep<br/>model x family x strategy x options x seed"] --> T["task<br/>N note files, a few hold facts"]
-    T --> H[("heap<br/>messages as objects")]
-    H --> C{"context over<br/>threshold?"}
-    C -- yes --> G["collector<br/>old messages become stubs"]
-    C -- no --> O
-    G --> O{"still over<br/>budget?"}
-    O -- yes --> X["run stops: oom"]
-    O -- no --> L["LLM call via LiteLLM"]
-    L --> A{"tool call?"}
-    A -- "list_files / read_file" --> H
-    A -- "recall(id)" --> R["restore a stub"] --> H
-    A -- "text answer" --> E["run stops: answered<br/>success = answer matches"]
-    X --> W[("results/runs.jsonl<br/>results/traces/")]
-    E --> W
-    W --> P["analysis: results / report / audit / timeline / tradeoff"]
-```
+![One run: sweep, task, heap, collector, LLM call, tool calls, results](docs/img/run-flow.svg)
 
 What a collector sees: roots are always kept, the newest turn is protected, and a message is reachable when it shares a key with a reachable user or assistant message.
 
-```mermaid
-flowchart LR
-    SYS["system prompt<br/>root"]:::root
-    TASK["task<br/>root"]:::root
-    A1["assistant: read notes/03.txt"] --> R1["tool: notes/03.txt<br/>... ORION is 4821 ..."]
-    A2["assistant: read notes/04.txt"] --> R2["tool: notes/04.txt<br/>filler"]
-    Q["question: code for ORION?<br/>root"]:::root --> R1
-    NEW["newest turn<br/>protected"]:::root
-    R2:::dead
-    A2:::dead
-    classDef root fill:#dbeafe,stroke:#2563eb
-    classDef dead fill:#f3f4f6,stroke:#9ca3af,color:#6b7280,stroke-dasharray:4
-```
+![Roots are always kept; a message sharing a key with a root is reached; the rest becomes a stub](docs/img/reachability.svg)
 
-Grey = unreachable, so mark-sweep turns it into a stub.
+Grey, dashed = unreachable, so mark-sweep turns it into a stub. Diagram sources are the `.d2` files next to the images; re-render with `d2 --theme=0 --pad=20 --layout=elk <file>.d2 <file>.svg`.
 
 ## Running it
 

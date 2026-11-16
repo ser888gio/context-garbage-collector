@@ -1,0 +1,30 @@
+direction: down
+
+sweep: "cgc.agent sweep\nmodel x family x strategy x options x seed"
+task: "task\nN note files, a few hold facts"
+heap: "heap\nmessages as objects" {shape: cylinder}
+over: "context over\nthreshold?" {shape: diamond}
+collector: "collector\nold messages become stubs"
+still: "still over\nbudget?" {shape: diamond}
+oom: "run stops: oom"
+llm: "LLM call via LiteLLM"
+tool: "tool call?" {shape: diamond}
+restore: "restore a stub"
+answered: "run stops: answered\nsuccess = answer matches"
+results: "results/runs.jsonl\nresults/traces/" {shape: cylinder}
+analysis: "analysis: results / report / audit / timeline / tradeoff"
+
+sweep -> task -> heap -> over
+over -> collector: yes
+over -> still: no
+collector -> still
+still -> oom: yes
+still -> llm: no
+llm -> tool
+tool -> heap: list_files / read_file
+tool -> restore: recall(id)
+restore -> heap
+tool -> answered: text answer
+oom -> results
+answered -> results
+results -> analysis
