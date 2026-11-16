@@ -328,6 +328,10 @@ def main():
     p.add_argument("--max-turns", type=int, default=80)
     p.add_argument("--max-cost", type=float, default=0.0, help="USD cap over all runs in runs.jsonl")
     a = p.parse_args()
+    try:
+        hint_modes = [C.stub_mode(h) for h in a.hints.split(",")]
+    except KeyError as e:
+        p.error(f"unknown --hints value {e.args[0]!r}; choose from {', '.join(k for k in C.MODES if isinstance(k, str))}")
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -338,7 +342,7 @@ def main():
         complete = litellm_complete(model)
         cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  [{"true": True, "false": False}.get(h, h) for h in a.hints.split(",")], [x == "true" for x in a.pressure.split(",")],
+                                  hint_modes, [x == "true" for x in a.pressure.split(",")],
                                   [x == "true" for x in a.coalesce.split(",")])
         for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")

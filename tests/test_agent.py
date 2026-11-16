@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from types import SimpleNamespace as NS
 
 import pytest
@@ -490,3 +491,59 @@ def test_coalesce_run_shows_the_model_one_collected_message_and_records_the_flag
     assert any(m["role"] == "user" and m["content"].startswith("[collected ") and "earlier tool results" in m["content"]
                for msgs in seen for m in msgs)
     assert row["coalesce"] is True
+
+
+SWEEP = ["agent", "--models", "fake/model:free", "--strategies", "mark_sweep", "--seeds", "0", "--n-files", "10"]
+
+
+@pytest.fixture
+def sweep(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def fake_complete(model):
+        def complete(messages, tools):
+            calls.append(model)
+            return FakeAgent()(messages, tools)
+        return complete
+
+    monkeypatch.setattr(agent, "litellm_complete", fake_complete)
+
+    def go(*args):
+        monkeypatch.setattr(sys, "argv", SWEEP + list(args))
+        agent.main()
+        return calls
+    return go
+
+
+def stored_rows(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "results" / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.mark.parametrize("flag", ["keys", "true"])
+def test_sweep_skips_a_cell_already_stored_with_legacy_hints_true(sweep, tmp_path, flag):
+    task_id = needle_task(seed=0, n_files=10, position=0.5)["id"]
+    legacy = {"model": "fake/model:free", "strategy": "mark_sweep", "trigger": "threshold:0.7", "hints": True,
+              "budget": 16000, "task_id": task_id, "cost_usd": 0.0}
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "runs.jsonl").write_text(json.dumps(legacy) + chr(10), encoding="utf-8")
+
+    calls = sweep("--hints", flag)
+
+    assert calls == []
+    assert len(stored_rows(tmp_path)) == 1
+
+
+@pytest.mark.parametrize("flag, stored", [("false", "none"), ("true", "keys"), ("none", "none"), ("preview", "preview")])
+def test_sweep_stores_the_hint_mode_name(sweep, tmp_path, flag, stored):
+    sweep("--hints", flag)
+
+    assert stored_rows(tmp_path)[0]["hints"] == stored
+
+
+def test_sweep_rejects_an_unknown_hints_value_before_running_anything(sweep, tmp_path):
+    with pytest.raises(SystemExit) as exit_info:
+        sweep("--hints", "bogus")
+
+    assert exit_info.value.code == 2
+    assert not (tmp_path / "results").exists()
