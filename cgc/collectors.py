@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 # ponytail: regex keys (paths, URLs, CAPS names, 4+ digit numbers, short quotes); swap for an LLM/embedding linker as its own strategy
 KEY_RE = re.compile(r'https?://\S+|[\w./-]+\.\w{1,5}\b|\b[A-Z][A-Z0-9_-]{2,}\b|\b\d{4,}\b|"[^"]{3,40}"')
+NUM_RE = re.compile(r"\b\d{4,}\b")
+MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
+         "preview": "preview", "numbers": "numbers", "fresh": "fresh", "pointer": "pointer"}
 
 
 @dataclass
@@ -21,6 +24,10 @@ class Obj:
     survived: int = 0
     # Without this, the summary message (still live and collectable) would be re-summarized every GC run.
     summarized: bool = False
+
+    @property
+    def original(self):
+        return self.saved if self.saved is not None else self.msg.get("content") or ""
 
     @property
     def live(self):
@@ -71,11 +78,6 @@ def collectable(heap):
     t = now(heap)
     return [o for o in heap if o.live and not protected(o, t)]
 
-NUM_RE = re.compile(r"\b\d{4,}\b")
-MODES = {False: "none", "false": "none", "none": "none", True: "keys", "true": "keys", "keys": "keys",
-         "preview": "preview", "numbers": "numbers", "fresh": "fresh", "pointer": "pointer"}
-
-
 def stub_mode(hints):
     return MODES[hints]
 
@@ -96,6 +98,12 @@ def kill(o, hints=False):
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
         o.msg["content"] = stub
+
+
+def kill_all(objs, st):
+    for o in objs:
+        kill(o, st.get("hints", False))
+    return [o.id for o in objs]
 
 
 def restore(heap, obj_id, t):
@@ -142,23 +150,20 @@ def truncate(heap, st):
 def lru_mask(heap, st):
     t = now(heap)
     users = [o for o in heap if o.live and o.msg["role"] == "assistant"]
+    user_keys = {u.id: keys(u) for u in users}
     for o in heap:
         ko = keys(o)
         for u in users:
-            if u.turn > o.last_used and ko & keys(u):
+            if u.turn > o.last_used and ko & user_keys[u.id]:
                 o.last_used = u.turn
     out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.last_used >= st.get("lru_turns", 3)]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def mask(heap, st):
     t = now(heap)
     out = [o for o in collectable(heap) if o.msg["role"] == "tool" and t - o.turn >= st.get("mask_turns", 3)]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def hybrid(heap, st):
@@ -179,11 +184,11 @@ def hybrid(heap, st):
 def refcount(heap, st):
     t = now(heap)
     out = []
+    k = {o.id: keys(o) for o in heap if o.live}
     changed = True
     while changed:
         changed = False
         live = [o for o in heap if o.live]
-        k = {o.id: keys(o) for o in live}
         for o in live:
             if protected(o, t):
                 continue
@@ -195,23 +200,20 @@ def refcount(heap, st):
     return out
 
 
+def sweep_unreachable(heap, st, **reach):
+    seen = reachable(heap, **reach)
+    return kill_all([o for o in collectable(heap) if o.id not in seen], st)
+
+
 def mark_sweep(heap, st):
-    seen = reachable(heap)
-    out = [o for o in collectable(heap) if o.id not in seen]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return sweep_unreachable(heap, st)
 
 
 def mark_sweep_chain(heap, st):
     # A reached tool result also propagates, but only if it has at most chain_max_refs keys. A link or value
     # file carries ~3 (name, name, path); a list_files result carries one path per file, so it stays a leaf.
     # A per-key fanout guard cannot do this: every path appears in exactly 3 messages (listing, call, result).
-    seen = reachable(heap, chain_max_keys=st.get("chain_max_refs", 3))
-    out = [o for o in collectable(heap) if o.id not in seen]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return sweep_unreachable(heap, st, chain_max_keys=st.get("chain_max_refs", 3))
 
 
 CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\b")
@@ -221,7 +223,7 @@ def facts(o):
     # A clause (split on . ; newline) with one CAPS key asserts its LAST 4+ digit number. Splitting on ";"
     # keeps "ORION is now 7310; the old code 4821 is revoked" as ORION = 7310, not the revoked 4821.
     out = {}
-    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.saved or o.msg.get("content") or ""):
+    for sentence in re.split(r"[.!?](?:\s|$)|[;\n]", o.original):
         caps, nums = set(CAPS_RE.findall(sentence)), NUM_RE.findall(sentence)
         if len(caps) == 1 and nums:
             out[caps.pop()] = nums[-1]
@@ -233,9 +235,7 @@ def write_barrier(heap, st):
     f = {o.id: facts(o) for o in live}
     stale = [o for o in collectable(heap)
              if any(f[p.id].get(k, v) != v for p in live if p.id > o.id for k, v in f[o.id].items())]
-    for o in stale:
-        kill(o, st.get("hints", False))
-    return [o.id for o in stale] + mark_sweep(heap, st)
+    return kill_all(stale, st) + mark_sweep(heap, st)
 
 
 def generational(heap, st):
@@ -250,8 +250,7 @@ def generational(heap, st):
         else:
             kill(o, st.get("hints", False))
             out.append(o.id)
-    st["major"] = size(heap) > st["budget"] * st.get("threshold", 0.7)
-    if st["major"]:
+    if size(heap) > st["budget"] * st.get("threshold", 0.7):
         out += mark_sweep(heap, st)
     return out
 
@@ -267,9 +266,7 @@ def h2o(heap, st):
     heavy = sorted((o for o in pool if o.msg["role"] == "tool" and refs[o.id]), key=lambda o: (-refs[o.id], o.id))
     keep = {o.id for o in heavy[:st.get("h2o_heavy", 4)]}
     out = [o for o in pool if o.id not in keep]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def forget(heap, ids, hints=False):
@@ -288,10 +285,8 @@ def forget(heap, ids, hints=False):
 
 def oracle(heap, st):
     out = [o for o in collectable(heap)
-           if not any(k in (o.saved if o.saved is not None else o.msg.get("content") or "") for k in st.get("oracle_keys", ()))]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+           if not any(k in o.original for k in st.get("oracle_keys", ()))]
+    return kill_all(out, st)
 
 
 def cosine(a, b):
@@ -313,9 +308,7 @@ def semantic(heap, st):
     centre = [sum(col) for col in zip(*roots)] if roots else []
     ranked = sorted(pool, key=lambda o: (-cosine(vec[o.id], centre), o.id))
     out = ranked[st.get("semantic_k", 4):]
-    for o in out:
-        kill(o, st.get("hints", False))
-    return [o.id for o in out]
+    return kill_all(out, st)
 
 
 def with_target(fn):
