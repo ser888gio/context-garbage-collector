@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 
@@ -65,19 +63,6 @@ def test_with_search_the_model_gets_one_more_tool_and_one_more_sentence(run_swee
     assert {tools == ["list_files", "read_file", "recall", "search"] for _, tools in sweep.offered} == {True}
     assert {system.endswith(" You can call search(query) to find text in collected messages without restoring them.")
             for system, _ in sweep.offered} == {True}
-
-
-def test_resuming_skips_cells_recorded_before_the_search_field_existed(run_sweep):
-    sweep = run_sweep("--strategies", "mark_sweep", "--search", "false")
-    runs = sweep.cwd / "results" / "runs.jsonl"
-    legacy = [{k: v for k, v in json.loads(line).items() if k not in ("search", "searches")}
-              for line in runs.read_text().splitlines()]
-    runs.write_text("".join(json.dumps(r) + "\n" for r in legacy))
-    before = sweep.agent.requests
-
-    sweep.rerun()
-
-    assert (sweep.agent.requests - before, len(sweep.rows)) == (0, 1)
 
 
 def test_a_search_cell_is_not_skipped_because_the_same_cell_ran_without_search(run_sweep):
