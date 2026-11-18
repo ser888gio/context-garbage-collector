@@ -117,6 +117,34 @@ def add_usage(s, resp):
     s["cost_usd"] += cost_of(resp)
 
 
+def build_tools(recall, manual, compress, search):
+    return (TOOLS[:2] + [TAIL_RECALL_TOOL] if recall == "tail" else TOOLS) + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
+
+
+def memory_notes(heap, budget, st, model_calls, nudge, pressure, manual, compress):
+    send = pressure or manual
+    if compress and not send and C.size(heap) > budget * st["nudge_from"]:
+        nudge.setdefault("first", model_calls)
+        send = (model_calls - nudge["first"]) % st["nudge_every"] == 0
+    return [pressure_note(heap, budget)] if send else []
+
+
+def track_usage(s, resp):
+    add_usage(s, resp)
+    u = resp.usage
+    s["cached_input_tokens"] += getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+    s["max_context_tokens"] = max(s["max_context_tokens"], u.prompt_tokens)
+
+
+def assistant_message(m):
+    msg = {"role": "assistant", "content": m.content}
+    if m.tool_calls:
+        msg["tool_calls"] = [{"id": c.id, "type": "function",
+                              "function": {"name": c.function.name, "arguments": c.function.arguments or "{}"}}
+                             for c in m.tool_calls]
+    return msg
+
+
 def guarded(fn, *args):
     try:
         return fn(*args), ""
@@ -187,8 +215,8 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     error = ""
     manual = strategy == "manual"
     compress = strategy == "compress"
-    tools = (TOOLS[:2] + [TAIL_RECALL_TOOL] if recall == "tail" else TOOLS) + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
-    first_nudge, model_calls = None, 0
+    tools = build_tools(recall, manual, compress, search)
+    nudge, model_calls = {}, 0
     known = {t["function"]["name"] for t in tools}
 
     def handle_call(c, turn):
@@ -247,28 +275,16 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         # The note is appended after the prefix accounting above and never stored in the heap,
         # so it can't break the cached prefix or show up in later turns.
         model_calls += 1
-        send = pressure or manual
-        if compress and not send and C.size(heap) > budget * st["nudge_from"]:
-            first_nudge = model_calls if first_nudge is None else first_nudge
-            send = (model_calls - first_nudge) % st["nudge_every"] == 0
-        note = [pressure_note(heap, budget)] if send else []
+        note = memory_notes(heap, budget, st, model_calls, nudge, pressure, manual, compress)
         resp, error = guarded(complete, msgs + note, tools)
         if error:
             end = "api_error"
             break
-        add_usage(s, resp)
-        u = resp.usage
-        s["cached_input_tokens"] += getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", 0) or 0
-        s["max_context_tokens"] = max(s["max_context_tokens"], u.prompt_tokens)
+        track_usage(s, resp)
 
         m = resp.choices[0].message
         calls = m.tool_calls or []
-        msg = {"role": "assistant", "content": m.content}
-        if calls:
-            msg["tool_calls"] = [{"id": c.id, "type": "function",
-                                  "function": {"name": c.function.name, "arguments": c.function.arguments or "{}"}}
-                                 for c in calls]
-        add(msg, turn)
+        add(assistant_message(m), turn)
 
         if not calls:
             if not asked:
