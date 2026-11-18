@@ -67,11 +67,20 @@ def cost_of(resp):
         return 0.0
 
 
-def call_tool(name, args, task, heap, turn):
+TAIL_RECALL_TOOL = {"type": "function", "function": {
+    "name": "recall", "description": "Return a collected message's content as this call's result; the stub stays in place.",
+    "parameters": TOOLS[2]["function"]["parameters"]}}
+
+
+def call_tool(name, args, task, heap, turn, recall="in_place"):
     if name == "list_files":
         return "\n".join(task["files"])
     if name == "read_file":
         return task["files"].get(args.get("path", ""), f"error: no file {args.get('path')!r}")
+    if name == "recall" and recall == "tail":
+        obj_id = int(args.get("id", -1))
+        o = next((o for o in heap if o.id == obj_id), None)
+        return f"[recalled msg {obj_id}] {o.saved}" if o and o.saved is not None else "error: nothing to restore"
     if name == "recall":
         return "restored" if C.restore(heap, int(args.get("id", -1)), turn) else "error: nothing to restore"
     if name == "search":
@@ -136,7 +145,7 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
 
 
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
-        embed=None, coalesce=False, search=False, dedup=False):
+        embed=None, coalesce=False, search=False, dedup=False, recall="in_place"):
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label="", call=""):
@@ -177,7 +186,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     error = ""
     manual = strategy == "manual"
     compress = strategy == "compress"
-    tools = TOOLS + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
+    tools = (TOOLS[:2] + [TAIL_RECALL_TOOL] if recall == "tail" else TOOLS) + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
     first_nudge, model_calls = None, 0
     known = {t["function"]["name"] for t in tools}
 
@@ -206,7 +215,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             s["compressed_msgs"] += len(done)
             result = f"compressed {done} into msg {done[0]}" if done else f"refused: {refused}"
         else:
-            result = call_tool(c.function.name, args, task, heap, turn)
+            result = call_tool(c.function.name, args, task, heap, turn, recall)
         label = f"{c.function.name} {args.get('path', '')}".strip()
         o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label, call=sig)
         if manual or compress:
@@ -271,7 +280,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         for c in calls:
             handle_call(c, turn)
 
-    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, dedup=dedup, tag=tag,
+    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, dedup=dedup, recall=recall, tag=tag,
                budget=budget)
     return build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0)
 
@@ -337,8 +346,8 @@ def save(row, trace):
     (RESULTS / "traces" / f"{row['run_id']}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
 
 
-def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, budget, task_id):
-    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, dedup, budget, task_id)
+def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, recall, budget, task_id):
+    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, dedup, recall, budget, task_id)
 
 
 def main():
@@ -355,6 +364,7 @@ def main():
     p.add_argument("--coalesce", default="false", help="comma list of true/false: render runs of collected tool results as one message")
     p.add_argument("--search", default="false", help="comma list of true/false: offer a search tool over collected messages")
     p.add_argument("--dedup", default="false", help="comma list of true/false: collect older results of repeated list_files/read_file calls")
+    p.add_argument("--recall", default="in_place", help="comma list of in_place/tail: restore a recalled message where it was, or return its content as the tool result at the end")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
@@ -374,10 +384,14 @@ def main():
     if not set(dedup_modes) <= {"true", "false"}:
         p.error(f"unknown --dedup value in {a.dedup!r}; choose from true, false")
 
+    recall_modes = a.recall.split(",")
+    if not set(recall_modes) <= {"in_place", "tail"}:
+        p.error(f"unknown --recall value in {a.recall!r}; choose from in_place, tail")
+
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
-                     r.get("coalesce", False), r.get("search", False), r.get("dedup", False), r["budget"], r["task_id"]) for r in load_runs()}
+                     r.get("coalesce", False), r.get("search", False), r.get("dedup", False), r.get("recall", "in_place"), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
@@ -385,18 +399,18 @@ def main():
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
                                   hint_modes, [x == "true" for x in a.pressure.split(",")],
                                   [x == "true" for x in a.coalesce.split(",")], [x == "true" for x in search_modes],
-                                  [x == "true" for x in dedup_modes])
-        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search, dedup in cells:
+                                  [x == "true" for x in dedup_modes], recall_modes)
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search, dedup, recall in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, a.budget, task["id"]) in done:
+            if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, recall, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} search={search} dedup={dedup} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} search={search} dedup={dedup} recall={recall} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce, search=search, dedup=dedup)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce, search=search, dedup=dedup, recall=recall)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break

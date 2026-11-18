@@ -61,6 +61,7 @@ These change what a stub carries, how the context is shown to the model, or when
 | `--triggers every_turn` | Collect before every model call. | — | Not run on a real model. |
 | `--positions` | Where the needle file sits in the reading order. | [Lost in the Middle](https://arxiv.org/abs/2307.03172) | Only 0.5 run so far. |
 | `--dedup true` | Stub the older result when a later live `list_files` or `read_file` result came from the same call. | OpenCode DCP plugin (deduplication) | Not run on a real model. |
+| `--recall tail` | Return a recalled message as the `recall` result at the end of the context (`[recalled msg N] ...`) and leave the stub where it is. | RAMPART (block placement) | Not run on a real model. |
 | `--upfront true` | Ask the question with the task instead of at the end. | — | Not run on a real model. |
 
 ## From other projects
@@ -73,7 +74,7 @@ Ideas taken from other context-management work. Each gets its own branch and a h
 | Searchable summaries | Keep the original of the message `hybrid` overwrites with its summary (`archived` in the trace), so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | Built, not yet run (H28). Rarely matters here: the overwritten message is usually an assistant tool call with no text, and the summarized tool results were already searchable. |
 | Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Built, not yet run (H29). |
 | `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Built, not yet run (H30) |
-| Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Queued |
+| Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Built, not yet run (H31) |
 | `--hints summary` | Stub carries a one-line, model-written summary of the collected message. | Dynamic Context Loading (Moncef Abboud): model-written tool briefs | Idea |
 
 The DCP plugin is AGPL-3.0; only its ideas are reimplemented here, no code is copied.
@@ -137,7 +138,7 @@ The tests are end to end. They start a local OpenAI-compatible server backed by 
 ## What gets recorded
 
 One row per run in `results/runs.jsonl`:
-- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `search`, `dedup`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
+- identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `search`, `dedup`, `recall`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, API keys redacted)
 - GC activity: `gc_runs`, `tokens_freed`, `recalls`, `searches`, `dedups` (messages collected by `--dedup`), `forgets`, `compressions` (successful `compress` calls), `compressed_msgs` (messages they replaced), `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
 - size and cost: `max_context_tokens`, `max_est_tokens`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `wall_s`
