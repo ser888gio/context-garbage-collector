@@ -11,7 +11,7 @@ KEYS = ["model", "strategy", "trigger"]
 
 def load(path):
     df = pd.read_json(path, lines=True)
-    for col, default in {"hints": False, "pressure": False, "coalesce": False, "search": False, "searches": float("nan"), "dedup": False, "dedups": float("nan"), "compressions": float("nan"), "compressed_msgs": float("nan"), "tag": "", "error": "", "cache_breaks": float("nan"),
+    for col, default in {"hints": False, "pressure": False, "coalesce": False, "search": False, "searches": float("nan"), "dedup": False, "recall": "in_place", "dedups": float("nan"), "compressions": float("nan"), "compressed_msgs": float("nan"), "tag": "", "error": "", "cache_breaks": float("nan"),
                          "stable_prefix_share": float("nan"), "max_est_tokens": float("nan"),
                          "max_context_tokens": float("nan"), "recalls": float("nan"), "cost_usd": 0.0}.items():
         if col not in df:
@@ -20,6 +20,7 @@ def load(path):
     df["coalesce"] = df.coalesce.fillna(False).astype(bool)
     df["search"] = df.search.fillna(False).astype(bool)
     df["dedup"] = df.dedup.fillna(False).astype(bool)
+    df["recall"] = df.recall.fillna("in_place")
     df["error"] = df.error.fillna("").astype(str)
     df["hints"] = df.hints.fillna("none").replace({False: "none", True: "keys"}).astype(str)
     df["tag"] = df.tag.fillna("")

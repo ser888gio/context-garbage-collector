@@ -36,6 +36,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H28 | Keeping summarized originals searchable fixes hybrid's lossy summaries. | `hybrid` with vs without `--search true` on multihop and poison: success. | open |
 | H29 | Collecting older duplicates of repeated tool calls cuts tokens without hurting success. | `--dedup true,false` with any strategy: input tokens, success, `dedups`, `repeated_calls`. | open |
 | H30 | A model that chooses what to compress and writes its own summaries beats both self-managed forgetting and automatic collection. | `compress` vs `manual`, `hybrid`, `mark_sweep`: success, oom, input tokens, `compressions`. | open |
+| H31 | Recalling to the tail keeps more `cached_input_tokens` than restoring in place at equal or better success, because restoring in place breaks the cached prefix from the restored message onward. | `--recall tail,in_place` with any collecting strategy: `cached_input_tokens`, `cache_breaks`, success, `recalls`. | open |
 
 ## Roadmap
 
