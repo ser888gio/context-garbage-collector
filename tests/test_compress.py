@@ -183,6 +183,10 @@ def test_after_crossing_half_the_budget_the_note_is_sent_every_fifth_call(twice)
     assert twice.noted == [False] * 6 + [True] + [False] * 4 + [True] + [False] * 4
 
 
+def test_the_note_stays_on_every_fifth_call_while_context_stays_above_half_the_budget(backwards):
+    assert backwards.noted == [False] * 6 + [True] + [False] * 4 + [True] + [False] * 4
+
+
 def test_manual_still_gets_the_note_on_every_call(manual):
     assert manual.noted == [True] * 14
 
