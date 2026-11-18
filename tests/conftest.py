@@ -24,14 +24,15 @@ class ScriptedAgent:
     links, prefers a correction over the code it revokes, resolves a description to a project name, and
     recalls collected messages whose stubs name the project it is chasing (skipping stubs that point at a
     superseding message). With a `forget` tool it frees old tool results while reading if the `[memory]` note
-    shows high usage."""
+    shows high usage. The `scripted-rereader` model also re-reads the first note once after reading them all,
+    and repeats every recall and search call once."""
 
     FORGET_AT_PERCENT = 60
 
     def __init__(self):
         self.requests, self.notes, self.context_size, self.offered = 0, [], 0, []
 
-    def reply(self, messages, tools):
+    def reply(self, messages, tools, model=""):
         self.requests += 1
         self.context_size = len(messages)
         if messages[0]["content"].startswith(SUMMARIZE):
@@ -53,6 +54,10 @@ class ScriptedAgent:
                 call["content"] = f"Listing the notes to find {upfront.group(1) and 'project ' + upfront.group(1) or 'the ' + upfront.group(2)}"
             return call, finish
 
+        rereader = "rereader" in model
+        if rereader and calls and calls[-1]["name"] in ("recall", "search") and calls.count(calls[-1]) == 1:
+            return self.call(calls[-1]["name"], json.loads(calls[-1]["arguments"]))
+
         read = {json.loads(c["arguments"]).get("path") for c in calls if c["name"] == "read_file"}
         read |= {path for _, path, _ in stubs}
         n_files = int(re.search(r"has (\d+) note files", messages[1]["content"]).group(1))
@@ -64,6 +69,10 @@ class ScriptedAgent:
             if "forget" in tool_names and usage and int(usage.group(1)) >= self.FORGET_AT_PERCENT and live[:-1]:
                 return self.call("forget", {"ids": live[:-1]})
             return self.call("read_file", {"path": unread[0]})
+
+        again = {"name": "read_file", "arguments": json.dumps({"path": "notes/00.txt"})}
+        if rereader and calls.count(again) == 1:
+            return self.call("read_file", {"path": "notes/00.txt"})
 
         asked = next((QUESTION.search(m["content"]) for m in reversed(messages)
                       if m["role"] == "user" and QUESTION.search(m["content"])), None)
@@ -131,7 +140,7 @@ def serve(agent):
                 payload = {"error": {"message": f"bad request {LEAKY_URL}", "type": "invalid_request_error",
                                      "code": None}}
             else:
-                message, finish = agent.reply(body["messages"], body.get("tools"))
+                message, finish = agent.reply(body["messages"], body.get("tools"), body["model"])
                 prompt = len(json.dumps(body["messages"])) // 4
                 payload = {"id": "chatcmpl-e2e", "object": "chat.completion", "created": 0, "model": body["model"],
                            "choices": [{"index": 0, "message": message, "finish_reason": finish}],

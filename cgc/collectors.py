@@ -27,6 +27,7 @@ class Obj:
     archived: str | None = None
     stub_keys: list[str] | None = None
     stub_tail: str = ""
+    call: str = ""
 
     @property
     def original(self):
@@ -391,8 +392,29 @@ def refresh_stubs(heap, pointers=False):
         o.msg["content"] = format_stub(o, items, o.stub_tail)
 
 
+# recall, search and forget results describe the state at call time, so an identical later call is not a repeat.
+DEDUP_TOOLS = ("list_files", "read_file")
+
+
+def dedupe(heap, hints=False):
+    newest = {}
+    for o in heap:
+        if o.live and o.call:
+            newest[o.call] = o.id
+    older = [o for o in collectable(heap)
+             if o.call and o.call.split("{")[0] in DEDUP_TOOLS and newest[o.call] != o.id]
+    for o in older:
+        kill(o, hints)
+    return [o.id for o in older]
+
+
 def collect(strategy, heap, st):
     freed = STRATEGIES[strategy](heap, st)
+    if st.get("dedup"):
+        # Before refresh_stubs so the stubs it just created are refreshed in this same pass.
+        deduped = dedupe(heap, st.get("hints", False))
+        st["dedups"] = st.get("dedups", 0) + len(deduped)
+        freed = freed + deduped
     if st.get("hints") in ("fresh", "pointer"):
         refresh_stubs(heap, pointers=st["hints"] == "pointer")
     return freed

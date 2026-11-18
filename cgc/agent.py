@@ -129,21 +129,21 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
 
 
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
-        embed=None, coalesce=False, search=False):
+        embed=None, coalesce=False, search=False, dedup=False):
     heap, ids = [], itertools.count()
 
-    def add(msg, turn, root=False, label=""):
-        heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, touched=turn, last_used=turn))
+    def add(msg, turn, root=False, label="", call=""):
+        heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, call=call, touched=turn, last_used=turn))
         return heap[-1]
 
     add({"role": "system", "content": SYSTEM + SEARCH_SENTENCE * search}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     threshold, target = parse_trigger(trigger)
-    st = {"budget": budget, "hints": hints, "threshold": threshold}
+    st = {"budget": budget, "hints": hints, "threshold": threshold, "dedup": dedup}
     if target is not None:
         st["target"] = target
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, searches=0, forgets=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
+             recalls=0, searches=0, forgets=0, dedups=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
              max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
@@ -193,7 +193,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         else:
             result = call_tool(c.function.name, args, task, heap, turn)
         label = f"{c.function.name} {args.get('path', '')}".strip()
-        o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label)
+        o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label, call=sig)
         if manual:
             o.msg["content"] = f"[msg {o.id}] {result}"
 
@@ -206,6 +206,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
                 end = "api_error"
                 break
             s["gc_runs"] += 1
+            s["dedups"] = st.get("dedups", 0)
             s["tokens_freed"] += before - C.size(heap)
             events.append({"turn": turn, "before": before, "after": C.size(heap), "collected": freed})
         s["max_est_tokens"] = max(s["max_est_tokens"], C.size(heap))
@@ -250,7 +251,7 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         for c in calls:
             handle_call(c, turn)
 
-    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, tag=tag,
+    cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, dedup=dedup, tag=tag,
                budget=budget)
     return build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0)
 
@@ -316,8 +317,8 @@ def save(row, trace):
     (RESULTS / "traces" / f"{row['run_id']}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
 
 
-def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, budget, task_id):
-    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, budget, task_id)
+def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, budget, task_id):
+    return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, dedup, budget, task_id)
 
 
 def main():
@@ -333,6 +334,7 @@ def main():
     p.add_argument("--pressure", default="false", help="comma list of true/false: ephemeral memory-usage note each call")
     p.add_argument("--coalesce", default="false", help="comma list of true/false: render runs of collected tool results as one message")
     p.add_argument("--search", default="false", help="comma list of true/false: offer a search tool over collected messages")
+    p.add_argument("--dedup", default="false", help="comma list of true/false: collect older results of repeated list_files/read_file calls")
     p.add_argument("--tag", default="", help="experiment label stored in each row (not part of the resume key)")
     p.add_argument("--n-files", type=int, default=30)
     p.add_argument("--budget", type=int, default=16000)
@@ -348,28 +350,33 @@ def main():
     if not set(search_modes) <= {"true", "false"}:
         p.error(f"unknown --search value in {a.search!r}; choose from true, false")
 
+    dedup_modes = a.dedup.split(",")
+    if not set(dedup_modes) <= {"true", "false"}:
+        p.error(f"unknown --dedup value in {a.dedup!r}; choose from true, false")
+
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
-                     r.get("coalesce", False), r.get("search", False), r["budget"], r["task_id"]) for r in load_runs()}
+                     r.get("coalesce", False), r.get("search", False), r.get("dedup", False), r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
         cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
                                   hint_modes, [x == "true" for x in a.pressure.split(",")],
-                                  [x == "true" for x in a.coalesce.split(",")], [x == "true" for x in search_modes])
-        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search in cells:
+                                  [x == "true" for x in a.coalesce.split(",")], [x == "true" for x in search_modes],
+                                  [x == "true" for x in dedup_modes])
+        for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search, dedup in cells:
             task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
-            if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, a.budget, task["id"]) in done:
+            if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
             if is_paid(model) and spent >= a.max_cost:
                 print(f"skip {model}: spent ${spent:.4f} >= cap ${a.max_cost}")
                 break
-            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} search={search} {task['id']}", flush=True)
+            print(f"{model} {strategy} {trigger} hints={hints} pressure={pressure} coalesce={coalesce} search={search} dedup={dedup} {task['id']}", flush=True)
             try:
-                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce, search=search)
+                row, trace = run(task, model, strategy, trigger, a.budget, complete, a.max_turns, hints, pressure, a.tag, coalesce=coalesce, search=search, dedup=dedup)
             except RateLimited:
                 print(f"  {model} still rate-limited, moving to next model")
                 break
