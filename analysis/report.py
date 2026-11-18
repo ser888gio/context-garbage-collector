@@ -1,4 +1,4 @@
-import sys
+import argparse
 
 import matplotlib
 import pandas as pd
@@ -7,23 +7,37 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 KEYS = ["model", "strategy", "trigger"]
+RUNS = "results/runs.jsonl"
+NAN = float("nan")
+DEFAULTS = {
+    "hints": "none", "pressure": False, "coalesce": False, "search": False, "searches": NAN, "dedup": False,
+    "recall": "in_place", "dedups": NAN, "compressions": NAN, "compressed_msgs": NAN, "tag": "", "error": "",
+    "cache_breaks": NAN, "stable_prefix_share": NAN, "max_est_tokens": NAN, "max_context_tokens": NAN,
+    "recalls": NAN, "cost_usd": 0.0,
+}
+# Old rows have NaN here; the other defaults only fill columns that are missing entirely (cost_usd NaN stays NaN).
+FILL_NULLS = ["hints", "pressure", "coalesce", "search", "dedup", "recall", "tag", "error"]
+BOOLS = ["pressure", "coalesce", "search", "dedup"]
+
+
+def cli(out):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("path", nargs="?", default=RUNS)
+    ap.add_argument("--out", default=out)
+    args = ap.parse_args()
+    return args.path, args.out
 
 
 def load(path):
     df = pd.read_json(path, lines=True)
-    for col, default in {"hints": False, "pressure": False, "coalesce": False, "search": False, "searches": float("nan"), "dedup": False, "recall": "in_place", "dedups": float("nan"), "compressions": float("nan"), "compressed_msgs": float("nan"), "tag": "", "error": "", "cache_breaks": float("nan"),
-                         "stable_prefix_share": float("nan"), "max_est_tokens": float("nan"),
-                         "max_context_tokens": float("nan"), "recalls": float("nan"), "cost_usd": 0.0}.items():
+    for col, default in DEFAULTS.items():
         if col not in df:
             df[col] = default
-    df["pressure"] = df.pressure.fillna(False).astype(bool)
-    df["coalesce"] = df.coalesce.fillna(False).astype(bool)
-    df["search"] = df.search.fillna(False).astype(bool)
-    df["dedup"] = df.dedup.fillna(False).astype(bool)
-    df["recall"] = df.recall.fillna("in_place")
-    df["error"] = df.error.fillna("").astype(str)
-    df["hints"] = df.hints.fillna("none").replace({False: "none", True: "keys"}).astype(str)
-    df["tag"] = df.tag.fillna("")
+        elif col in FILL_NULLS:
+            df[col] = df[col].fillna(default)
+    df[BOOLS] = df[BOOLS].astype(bool)
+    df["error"] = df.error.astype(str)
+    df["hints"] = df.hints.replace({False: "none", True: "keys"}).astype(str)
     df["cached_share"] = df.cached_input_tokens / df.input_tokens
     df["oom"] = df.end == "oom"
     oracle = df[df.strategy == "oracle"].assign(ppt=lambda d: d.input_tokens / d.turns)
@@ -33,13 +47,14 @@ def load(path):
     return df
 
 
+def summarize(df, keys, sums, means):
+    named = {c: (c, "sum") for c in sums} | {c: (c, "mean") for c in means}
+    return df.groupby(keys).agg(runs=("success", "size"), success_rate=("success", "mean"), **named).reset_index()
+
+
 def table(path):
-    df = load(path)
-    return df.groupby(KEYS).agg(
-        runs=("success", "size"), success_rate=("success", "mean"), oom=("oom", "sum"),
-        input_tokens=("input_tokens", "mean"), cached_share=("cached_share", "mean"),
-        recalls=("recalls", "mean"), excess_tokens=("excess_tokens", "mean"), max_est_tokens=("max_est_tokens", "mean"),
-    ).reset_index()
+    return summarize(load(path), KEYS, ["oom"],
+                     ["input_tokens", "cached_share", "recalls", "excess_tokens", "max_est_tokens"])
 
 
 def plot(t, out):
@@ -53,6 +68,7 @@ def plot(t, out):
 
 
 if __name__ == "__main__":
-    t = table(sys.argv[1] if len(sys.argv) > 1 else "results/runs.jsonl")
+    path, out = cli("results/success_vs_tokens.png")
+    t = table(path)
     print(t.to_markdown(index=False, floatfmt=".2f"))
-    plot(t, "results/success_vs_tokens.png")
+    plot(t, out)
