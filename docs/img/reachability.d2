@@ -1,0 +1,28 @@
+direction: down
+
+classes: {
+  root: {style: {fill: "#dbeafe"; stroke: "#2563eb"}}
+  dead: {style: {fill: "#f3f4f6"; stroke: "#9ca3af"; font-color: "#6b7280"; stroke-dash: 4}}
+}
+
+kept: "always kept" {
+  grid-columns: 4
+  sys: "system prompt\nroot" {class: root}
+  task: "task\nroot" {class: root}
+  newest: "newest turn\nprotected" {class: root}
+  q: "question: code for ORION?\nroot" {class: root}
+}
+
+reached: "reached" {
+  a1: "assistant: read notes/03.txt"
+  r1: "tool: notes/03.txt\n... ORION is 4821 ..."
+  a1 -> r1
+}
+
+unreached: "unreached: stubbed" {
+  a2: "assistant: read notes/04.txt" {class: dead}
+  r2: "tool: notes/04.txt\nfiller" {class: dead}
+  a2 -> r2
+}
+
+kept.q -> reached.r1: ORION
