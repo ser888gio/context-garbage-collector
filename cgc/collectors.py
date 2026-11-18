@@ -28,6 +28,8 @@ class Obj:
     stub_keys: list[str] | None = None
     stub_tail: str = ""
     call: str = ""
+    # Summary text of a compress block. A block stays dead (original in `saved`) but must keep its summary visible.
+    block: str | None = None
 
     @property
     def original(self):
@@ -124,7 +126,7 @@ def restore(heap, obj_id, t):
     if o is None or o.saved is None:
         return False
     o.msg["content"], o.saved, o.dead = o.saved, None, False
-    o.stub_keys, o.stub_tail = None, ""
+    o.stub_keys, o.stub_tail, o.block = None, "", None
     o.touched = o.last_used = t
     return True
 
@@ -316,6 +318,31 @@ def forget(heap, ids, hints=False):
     return done, refused
 
 
+def compress(heap, from_id, to_id, summary, hints=False):
+    if not (isinstance(from_id, int) and isinstance(to_id, int) and isinstance(summary, str)):
+        return [], "from_id and to_id must be integers and summary a string"
+    if from_id > to_id:
+        return [], "from_id is after to_id"
+    if not summary.strip():
+        return [], "summary is empty"
+    t = now(heap)
+    targets = [o for o in heap if from_id <= o.id <= to_id and (o.live or o.block is not None) and not protected(o, t)]
+    if not targets:
+        return [], "nothing to compress: ids are roots, newest turn, unknown or already collected"
+    earlier = [o.block for o in targets if o.block is not None]
+    body = summary + (f" (earlier: {'; '.join(earlier)})" if earlier else "")
+    first = targets[0]
+    for o in targets:
+        kill(o, hints)
+        if o.block is not None and o is not first:
+            o.msg["content"], o.block, o.stub_keys, o.stub_tail = format_stub(o, [], ""), None, [], ""
+    if first.saved is None:
+        first.saved = first.msg.get("content") or ""
+    first.msg["content"] = f"[compressed msgs {first.id}-{targets[-1].id}] {body}"
+    first.block, first.stub_keys, first.stub_tail = body, None, ""
+    return [o.id for o in targets], ""
+
+
 def oracle(heap, st):
     out = [o for o in collectable(heap)
            if not any(k in o.original for k in st.get("oracle_keys", ()))]
@@ -365,6 +392,7 @@ STRATEGIES = {f.__name__: f for f in (none, truncate, lru_mask, mask, hybrid, re
 for _n in ("refcount", "mark_sweep", "mark_sweep_chain", "write_barrier", "generational", "semantic"):
     STRATEGIES[_n] = with_target(STRATEGIES[_n])
 STRATEGIES["manual"] = none
+STRATEGIES["compress"] = none
 
 
 def refresh_stubs(heap, pointers=False):

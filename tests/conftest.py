@@ -24,16 +24,23 @@ class ScriptedAgent:
     links, prefers a correction over the code it revokes, resolves a description to a project name, and
     recalls collected messages whose stubs name the project it is chasing (skipping stubs that point at a
     superseding message). With a `forget` tool it frees old tool results while reading if the `[memory]` note
-    shows high usage. The `scripted-rereader` model also re-reads the first note once after reading them all,
+    shows high usage. With a `compress` tool it replaces the old tool results it has read, from the oldest visible
+    summary block or result up to the one before the newest, with a summary of the access codes in them (the
+    `scripted-lossy` model leaves them out). Its first compress call is deliberately
+    odd for the `greedy` (every id), `backwards` (from_id after to_id) and `rootsonly` models. The `scripted-rereader` model also re-reads the first note once after reading them all,
     and repeats every recall and search call once."""
 
     FORGET_AT_PERCENT = 60
+    COMPRESS_AT_PERCENT = 55
+    FIRST_COMPRESS_RANGES = {"greedy": (0, 9999), "backwards": (9, 3), "rootsonly": (0, 1)}
 
     def __init__(self):
-        self.requests, self.notes, self.context_size, self.offered = 0, [], 0, []
+        self.requests, self.notes, self.context_size, self.offered, self.noted = 0, [], 0, [], []
+        self.seen = []
 
     def reply(self, messages, tools, model=""):
         self.requests += 1
+        self.seen.append(messages)
         self.context_size = len(messages)
         if messages[0]["content"].startswith(SUMMARIZE):
             facts = re.findall(r"(?:The|Correction: the) access code for project[^.]*\.", messages[1]["content"])
@@ -45,6 +52,7 @@ class ScriptedAgent:
                  for i, path, rest in STUB_ENTRY.findall(m["content"])]
         last = messages[-1]
         usage = re.match(r"\[memory\] context (\d+)%", last["content"] if last["role"] == "user" else "")
+        self.noted.append(bool(usage))
         if usage:
             self.notes.append(last["content"])
         if not calls and not stubs:
@@ -68,6 +76,16 @@ class ScriptedAgent:
             tool_names = {t["function"]["name"] for t in tools or []}
             if "forget" in tool_names and usage and int(usage.group(1)) >= self.FORGET_AT_PERCENT and live[:-1]:
                 return self.call("forget", {"ids": live[:-1]})
+            if "compress" in tool_names and usage and int(usage.group(1)) >= self.COMPRESS_AT_PERCENT and live[:-1]:
+                starts = [int(i) for m in messages for i in re.findall(r"\[compressed msgs (\d+)-", m.get("content") or "")]
+                old = " ".join(m["content"] for m in messages if m["role"] == "tool"
+                               and (n := re.match(r"\[msg (\d+)\] ", m["content"])) and int(n.group(1)) < live[-1])
+                facts = re.findall(r"(?:The|Correction: the) access code for project[^.]*\.", old)
+                summary = "Notes read, nothing important." if "lossy" in model else " ".join(facts) or "Notes read."
+                odd = next((r for k, r in self.FIRST_COMPRESS_RANGES.items() if k in model), None)
+                if odd and not any(c["name"] == "compress" for c in calls):
+                    return self.call("compress", {"from_id": odd[0], "to_id": odd[1], "summary": summary})
+                return self.call("compress", {"from_id": min(starts + live[:-1]), "to_id": live[-2], "summary": summary})
             return self.call("read_file", {"path": unread[0]})
 
         again = {"name": "read_file", "arguments": json.dumps({"path": "notes/00.txt"})}
@@ -172,7 +190,7 @@ class Sweep:
 
     def __init__(self, cwd, env, agent, proc, notes, argv):
         self.cwd, self.env, self.agent, self.proc, self.notes, self.argv = cwd, env, agent, proc, notes, argv
-        self.offered = []
+        self.offered, self.noted, self.seen = [], [], []
 
     @property
     def rows(self):
@@ -224,12 +242,14 @@ def run_sweep(scripted):
     def run(*args, check=True, into=None):
         cwd = into.cwd if into else tmp_path_factory.mktemp("sweep")
         (cwd / "docs" / "img").mkdir(parents=True, exist_ok=True)
-        start, start_offered = len(agent.notes), len(agent.offered)
+        start, start_offered, start_noted, start_seen = len(agent.notes), len(agent.offered), len(agent.noted), len(agent.seen)
         argv = ["cgc.agent", "--models", "openai/scripted-agent", "--seeds", "0", "--n-files", "10",
                 "--budget", "4000", "--max-cost", "1", *args]
         proc = cli(cwd, env, *argv, check=check)
         sweep = Sweep(cwd, env, agent, proc, agent.notes[start:], argv)
         sweep.offered = agent.offered[start_offered:]
+        sweep.noted = agent.noted[start_noted:]
+        sweep.seen = agent.seen[start_seen:]
         return sweep
 
     return run
