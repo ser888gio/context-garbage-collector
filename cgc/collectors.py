@@ -74,6 +74,10 @@ def now(heap):
     return max(o.turn for o in heap)
 
 
+def referrers(o, live, k):
+    return [r for r in live if r.id != o.id and r.is_referencer and k[r.id] & k[o.id]]
+
+
 def protected(o, t):
     # The newest turn's messages haven't been seen by the model yet; a just-recalled message
     # would otherwise be collected again before the model reads it.
@@ -209,7 +213,7 @@ def refcount(heap, st):
         for o in live:
             if protected(o, t):
                 continue
-            if not any(r.id != o.id and r.is_referencer and k[r.id] & k[o.id] for r in live):
+            if not referrers(o, live, k):
                 kill(o, st.get("hints", False))
                 out.append(o.id)
                 changed = True
@@ -295,7 +299,8 @@ def h2o(heap, st):
     pinned = {o.id for o in live[:st.get("h2o_sink", 2)]} | {o.id for o in live if o.turn > t - st.get("h2o_recent", 2)}
     pool = [o for o in collectable(heap) if o.id not in pinned]
     k = {o.id: keys(o) for o in heap if o.live}
-    refs = {o.id: sum(r.id != o.id and r.is_referencer and bool(k[r.id] & k[o.id]) for r in heap if r.live) for o in pool}
+    live = [o for o in heap if o.live]
+    refs = {o.id: len(referrers(o, live, k)) for o in pool}
     # Zero-reference results are never "heavy"; without this the top-M slots would keep arbitrary garbage.
     heavy = sorted((o for o in pool if o.msg["role"] == "tool" and refs[o.id]), key=lambda o: (-refs[o.id], o.id))
     keep = {o.id for o in heavy[:st.get("h2o_heavy", 4)]}
@@ -359,10 +364,10 @@ def semantic(heap, st):
     cache = st.setdefault("_emb", {})
     pool = collectable(heap)
     objs = [o for o in heap if o.live and o.root] + pool
-    want = {(o.id, hash(text(o))): text(o) for o in objs if (o.id, hash(text(o))) not in cache}
+    want = {(o.id, text(o)): text(o) for o in objs if (o.id, text(o)) not in cache}
     if want:
         cache.update(zip(want, st["embed"](list(want.values()))))
-    vec = {o.id: cache[(o.id, hash(text(o)))] for o in objs}
+    vec = {o.id: cache[(o.id, text(o))] for o in objs}
     roots = [vec[o.id] for o in objs if o.root]
     centre = [sum(col) for col in zip(*roots)] if roots else []
     ranked = sorted(pool, key=lambda o: (-cosine(vec[o.id], centre), o.id))
