@@ -1,9 +1,6 @@
-import sys
-
 import matplotlib
-import pandas as pd
 
-from analysis.report import load
+from analysis.report import cli, load
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -12,11 +9,12 @@ FAMILIES = ["needle", "multihop", "poison"]
 MOVERS = {"mark_sweep": "#1f77b4", "refcount": "#d95f02", "write_barrier": "#2ca02c"}
 REFS = ["oracle", "truncate", "lru_mask"]
 MIN_N = 8
+MODEL = "gpt-oss-120b"
 
 
 def points(path):
     df = load(path)
-    df = df[df.model.str.contains("gpt-oss-120b") & (df.trigger == "threshold:0.7") & ~df.pressure
+    df = df[df.model.str.contains(MODEL) & (df.trigger == "threshold:0.7") & ~df.pressure
             & df.strategy.isin(list(MOVERS) + REFS)]
     df = df.assign(api_errors=df.error.ne(""))
     keys = (df.hints == "keys") & ~df.coalesce
@@ -58,7 +56,7 @@ def plot(pts, out):
     fig.legend(handles + [ref, hollow], labels + ["reference (keys hints)", "hollow = keys, filled = pointer+coalesce"],
                loc="lower center", ncol=5, fontsize=8, frameon=False)
     n = pts.n
-    fig.suptitle("Cost vs accuracy: keys hints → pointer + coalesce (gpt-oss-120b, 10 seeds)", fontsize=11)
+    fig.suptitle(f"Cost vs accuracy: keys hints → pointer + coalesce ({MODEL})", fontsize=11)
     note = f"n per point: {n.min()}-{n.max()} runs; points with fewer than {MIN_N} runs omitted"
     if pts.api_errors.sum():
         note += f"; {int(pts.api_errors.sum())} API-error runs counted as failures"
@@ -68,6 +66,7 @@ def plot(pts, out):
 
 
 if __name__ == "__main__":
-    pts = points(sys.argv[1])
+    path, out = cli("docs/img/tradeoff.png")
+    pts = points(path)
     print(pts.round(2).to_string())
-    plot(pts, "docs/img/tradeoff.png")
+    plot(pts, out)
