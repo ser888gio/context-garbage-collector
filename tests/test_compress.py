@@ -221,7 +221,7 @@ def test_with_coalesce_the_summary_block_stays_its_own_message(coalesced):
 
 
 def test_with_coalesce_the_other_stubs_are_still_grouped_into_runs(coalesced):
-    grouped = [t[:35] for t in texts(coalesced.seen[-1]) if t.startswith("[collected ")]
+    grouped = [t[:33] for t in texts(coalesced.seen[-1]) if t.startswith("[collected ")]
 
     assert grouped == [
         "[collected 6 earlier tool results", "[collected 2 earlier tool results"]
