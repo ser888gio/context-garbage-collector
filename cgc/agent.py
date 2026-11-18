@@ -38,6 +38,13 @@ FORGET_TOOL = {"type": "function", "function": {
                                      "The system prompt, task and newest turn are refused.",
     "parameters": {"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "integer"}}},
                    "required": ["ids"]}}}
+COMPRESS_TOOL = {"type": "function", "function": {
+    "name": "compress", "description": "Replace messages from_id..to_id (inclusive) that you no longer need verbatim "
+                                       "with your summary. Each original stays recallable by id. The system prompt, "
+                                       "task and newest turn are never compressed.",
+    "parameters": {"type": "object", "properties": {"from_id": {"type": "integer"}, "to_id": {"type": "integer"},
+                                                    "summary": {"type": "string"}},
+                   "required": ["from_id", "to_id", "summary"]}}}
 
 
 class RateLimited(Exception):
@@ -139,11 +146,12 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     add({"role": "system", "content": SYSTEM + SEARCH_SENTENCE * search}, 0, root=True)
     add({"role": "user", "content": task["prompt"]}, 0, root=True)
     threshold, target = parse_trigger(trigger)
-    st = {"budget": budget, "hints": hints, "threshold": threshold, "dedup": dedup}
+    st = {"budget": budget, "hints": hints, "threshold": threshold, "dedup": dedup, "nudge_from": 0.5,
+          "nudge_every": 5}
     if target is not None:
         st["target"] = target
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
-             recalls=0, searches=0, forgets=0, dedups=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
+             recalls=0, searches=0, forgets=0, dedups=0, compressions=0, compressed_msgs=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
              max_context_tokens=0, max_est_tokens=0)
 
     def summarize(parts):
@@ -168,7 +176,9 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
     events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
     error = ""
     manual = strategy == "manual"
-    tools = TOOLS + [FORGET_TOOL] * manual + [SEARCH_TOOL] * search
+    compress = strategy == "compress"
+    tools = TOOLS + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
+    first_nudge, model_calls = None, 0
     known = {t["function"]["name"] for t in tools}
 
     def handle_call(c, turn):
@@ -190,11 +200,16 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
             done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
             s["forgets"] += len(done)
             result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
+        elif compress and c.function.name == "compress":
+            done, refused = C.compress(heap, args.get("from_id"), args.get("to_id"), args.get("summary"), hints)
+            s["compressions"] += bool(done)
+            s["compressed_msgs"] += len(done)
+            result = f"compressed {done} into msg {done[0]}" if done else f"refused: {refused}"
         else:
             result = call_tool(c.function.name, args, task, heap, turn)
         label = f"{c.function.name} {args.get('path', '')}".strip()
         o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label, call=sig)
-        if manual:
+        if manual or compress:
             o.msg["content"] = f"[msg {o.id}] {result}"
 
     turn = 0
@@ -221,7 +236,12 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         prev = copy.deepcopy(msgs)  # collectors mutate messages in place
         # The note is appended after the prefix accounting above and never stored in the heap,
         # so it can't break the cached prefix or show up in later turns.
-        note = [pressure_note(heap, budget)] if pressure or manual else []
+        model_calls += 1
+        send = pressure or manual
+        if compress and not send and C.size(heap) > budget * st["nudge_from"]:
+            first_nudge = model_calls if first_nudge is None else first_nudge
+            send = (model_calls - first_nudge) % st["nudge_every"] == 0
+        note = [pressure_note(heap, budget)] if send else []
         resp, error = guarded(complete, msgs + note, tools)
         if error:
             end = "api_error"

@@ -38,6 +38,7 @@ A strategy decides which messages to stub when the context passes the threshold.
 | `h2o` | Keep the first 2 messages, the newest 2 turns and the 4 most-referenced tool results; stub the rest. | [H2O heavy-hitter KV eviction](https://arxiv.org/abs/2306.14048) | 3/3 | — | — | — |
 | `semantic` | Keep the 4 messages whose embeddings are closest to the roots; stub the rest. Needs `GEMINI_API_KEY`. | Query-aware selection ([SnapKV](https://arxiv.org/abs/2404.14469), [Quest](https://arxiv.org/abs/2406.10774)) | 10/10 | — | — | 4/10 |
 | `manual` | Collect nothing; the model gets a `forget(ids)` tool and a memory-pressure note. | Self-managed memory, [MemGPT](https://arxiv.org/abs/2310.08560) | 1/3 | — | — | — |
+| `compress` | Collect nothing; the model gets a `compress(from_id, to_id, summary)` tool that replaces a range of old messages with its own summary (originals stay recallable), and a memory note above 50% of the budget, every 5th call. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) (compress tool) | — | — | — | — |
 | `oracle` | Knows the answer; stubs everything that does not contain it. Upper bound. | This project | 10/10 | 10/10 | 10/10 | 10/10 |
 
 Strategies that are not baselines (`refcount`, `mark_sweep`, `mark_sweep_chain`, `write_barrier`, `generational`, `semantic`) also stub the oldest reachable tool results when the trigger sets a lower target (see `threshold:P:T` below).
@@ -71,7 +72,7 @@ Ideas taken from other context-management work. Each gets its own branch and a h
 | `search` tool (`--search true`) | Search the text of collected messages and return up to 5 matching sentences (`msg N: ...`), instead of restoring a whole message with `recall`. Live messages are not searched. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | Built, not yet run (H25-H27) |
 | Searchable summaries | Keep the original of the message `hybrid` overwrites with its summary (`archived` in the trace), so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | Built, not yet run (H28). Rarely matters here: the overwritten message is usually an assistant tool call with no text, and the summarized tool results were already searchable. |
 | Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Built, not yet run (H29). |
-| `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Queued |
+| `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Built, not yet run (H30) |
 | Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Queued |
 | `--hints summary` | Stub carries a one-line, model-written summary of the collected message. | Dynamic Context Loading (Moncef Abboud): model-written tool briefs | Idea |
 
@@ -138,7 +139,7 @@ The tests are end to end. They start a local OpenAI-compatible server backed by 
 One row per run in `results/runs.jsonl`:
 - identity: `run_id`, `ts`, `strategy`, `trigger`, `hints`, `pressure`, `coalesce`, `search`, `dedup`, `tag`, `budget`, `task_family`, `task_id`, `provider`, `model`
 - outcome: `success`, `end` (`answered`, `max_turns`, `oom` or `api_error`), `answer`, `turns`, `error` (exception type and first 300 chars of the message for `api_error`, API keys redacted)
-- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `searches`, `dedups` (messages collected by `--dedup`), `forgets`, `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
+- GC activity: `gc_runs`, `tokens_freed`, `recalls`, `searches`, `dedups` (messages collected by `--dedup`), `forgets`, `compressions` (successful `compress` calls), `compressed_msgs` (messages they replaced), `summary_calls`, `embed_calls`, `repeated_calls`, `unknown_tool_calls`
 - size and cost: `max_context_tokens`, `max_est_tokens`, `input_tokens`, `cached_input_tokens`, `output_tokens`, `cost_usd`, `wall_s`
 - cache behaviour: `stable_prefix_share` (share of each prompt identical to the previous one), `cache_breaks`
 - computed by the analysis, not stored: `excess_tokens`, prompt tokens per turn above the oracle run on the same task

@@ -35,6 +35,7 @@ Each one is checked against `results/runs.jsonl`. Status: open / supported / rej
 | H27 | On poison, search surfaces the correction next to the revoked code and raises success. | `--family poison --search true,false`: success. | open |
 | H28 | Keeping summarized originals searchable fixes hybrid's lossy summaries. | `hybrid` with vs without `--search true` on multihop and poison: success. | open |
 | H29 | Collecting older duplicates of repeated tool calls cuts tokens without hurting success. | `--dedup true,false` with any strategy: input tokens, success, `dedups`, `repeated_calls`. | open |
+| H30 | A model that chooses what to compress and writes its own summaries beats both self-managed forgetting and automatic collection. | `compress` vs `manual`, `hybrid`, `mark_sweep`: success, oom, input tokens, `compressions`. | open |
 
 ## Roadmap
 
