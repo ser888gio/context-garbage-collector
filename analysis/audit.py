@@ -13,10 +13,14 @@ def original(m):
 def audit(trace):
     row, heap = trace["row"], trace["heap"]
     prompts = " ".join(m["msg"].get("content") or "" for m in heap if m["msg"]["role"] == "user")
-    asked = re.search(r"access code for project (\w+)\?", prompts)
-    fact = asked and f"The access code for project {asked.group(1)} is"
-    # runs that hit oom never asked the question, so they have no needle
-    needle = next((m["id"] for m in heap if fact and m["msg"]["role"] == "tool" and fact in original(m)), None)
+    needle_path = trace.get("fact_paths", {}).get("needle_path")
+    if needle_path:
+        needle = next((m["id"] for m in heap if m["label"] == f"read_file {needle_path}"), None)
+    else:  # legacy traces recorded no paths
+        asked = re.search(r"access code for project (\w+)\?", prompts)
+        fact = asked and f"The access code for project {asked.group(1)} is"
+        # runs that hit oom never asked the question, so they have no needle
+        needle = next((m["id"] for m in heap if fact and m["msg"]["role"] == "tool" and fact in original(m)), None)
     recalls = [json.loads(c["function"]["arguments"] or "{}").get("id")
                for m in heap for c in m["msg"].get("tool_calls") or [] if c["function"]["name"] == "recall"]
     return {"run_id": row["run_id"], "model": row["model"], "strategy": row["strategy"], "trigger": row["trigger"],

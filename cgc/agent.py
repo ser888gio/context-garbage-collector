@@ -137,7 +137,8 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
            "success": is_success(task, answer), "end": end, "error": error, "answer": answer[:200], "turns": turn, **s,
            "stable_prefix_share": round(sum(shares) / len(shares), 3) if shares else 0.0,
            "cache_breaks": cache_breaks, "wall_s": round(time.time() - t0, 1)}
-    trace = {"row": row, "events": events,
+    fact_paths = {k: v for k, v in task.items() if k.endswith("_path")}
+    trace = {"row": row, "events": events, "fact_paths": fact_paths,
              "heap": [{"id": o.id, "turn": o.turn, "root": o.root, "dead": o.dead, "survived": o.survived,
                        "label": o.label, "msg": o.msg, "saved": o.saved,
                        "archived": o.archived} for o in heap]}
