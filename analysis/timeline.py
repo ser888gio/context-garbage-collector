@@ -43,9 +43,12 @@ def original(o):
 
 def needle_rows(trace):
     heap = trace["heap"]
+    rows = [i for i, o in enumerate(heap) if o["msg"]["role"] == "tool" and NEEDLE in original(o)]
+    needle_path = trace.get("fact_paths", {}).get("needle_path")
+    if needle_path:
+        return rows, [i for i, o in enumerate(heap) if o["label"] == f"read_file {needle_path}"]
     asked = [re.search(r"code for project (\w+)\?", o["msg"].get("content") or "") for o in heap if o["msg"]["role"] == "user"]
     target = next((m.group(1) for m in asked if m), None)
-    rows = [i for i, o in enumerate(heap) if o["msg"]["role"] == "tool" and NEEDLE in original(o)]
     return rows, [i for i in rows if f"{NEEDLE} {target} is" in original(heap[i])]
 
 

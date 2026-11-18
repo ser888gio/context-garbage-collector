@@ -12,13 +12,17 @@ NAMES = ["ORION", "ORIOLE", "ORINOCO", "OREGANO", "ORACLE", "ORCHID", "ORBITAL",
 FACT = "The access code for project {} is {}."
 
 
+def path(i):
+    return f"notes/{i:02d}.txt"
+
+
 def build(rng, n_files, words_per_file, facts):
     files = {}
     for i in range(n_files):
         body = [rng.choice(WORDS) for _ in range(words_per_file)]
         if i in facts:
             body.insert(words_per_file // 2, f". {facts[i]} ")
-        files[f"notes/{i:02d}.txt"] = " ".join(body)
+        files[path(i)] = " ".join(body)
     return files
 
 
@@ -45,7 +49,7 @@ def needle_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=Fals
     fact_files = [needle_at] + rng.sample([i for i in range(n_files) if i != needle_at], 3)
     facts = {f: FACT.format(names[j], codes[j]) for j, f in enumerate(fact_files)}
     files = build(rng, n_files, words_per_file, facts)
-    return task("needle", seed, n_files, position, upfront, files, str(codes[0]), names[0])
+    return task("needle", seed, n_files, position, upfront, files, str(codes[0]), names[0], needle_path=path(needle_at))
 
 
 def multihop_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=False):
@@ -58,7 +62,8 @@ def multihop_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=Fa
              value_at: FACT.format("VEGA", codes[0])}
     facts.update({f: FACT.format(others[j], codes[j + 1]) for j, f in enumerate(distract_at)})
     files = build(rng, n_files, words_per_file, facts)
-    return task("multihop", seed, n_files, position, upfront, files, str(codes[0]))
+    return task("multihop", seed, n_files, position, upfront, files, str(codes[0]),
+                needle_path=path(link_at), value_path=path(value_at))
 
 
 def poison_task(seed, n_files=30, words_per_file=450, position=0.2, upfront=False):
@@ -72,7 +77,8 @@ def poison_task(seed, n_files=30, words_per_file=450, position=0.2, upfront=Fals
              new_at: f"Correction: the access code for project ORION is now {new}; the old code {old} is revoked."}
     facts.update({f: FACT.format(others[j], distract_codes[j]) for j, f in enumerate(distract_at)})
     files = build(rng, n_files, words_per_file, facts)
-    return task("poison", seed, n_files, position, upfront, files, str(new), wrong=str(old))
+    return task("poison", seed, n_files, position, upfront, files, str(new), wrong=str(old),
+                needle_path=path(new_at), old_path=path(old_at))
 
 
 DESCRIPTIONS = ["northern mountain observatory", "southern coastal lighthouse", "eastern river dam",
@@ -90,7 +96,8 @@ def paraphrase_task(seed, n_files=30, words_per_file=450, position=0.5, upfront=
     facts = {f: f"Project {names[j]} is the {descs[j]}. " + FACT.format(names[j], codes[j]) for j, f in enumerate(fact_files)}
     files = build(rng, n_files, words_per_file, facts)
     question = f"What is the access code for the {descs[0]} project? Reply with just the number."
-    return task("paraphrase", seed, n_files, position, upfront, files, str(codes[0]), names[0], question=question)
+    return task("paraphrase", seed, n_files, position, upfront, files, str(codes[0]), names[0], question=question,
+                needle_path=path(needle_at))
 
 
 BUILDERS = {"paraphrase": paraphrase_task, "needle": needle_task, "multihop": multihop_task, "poison": poison_task}
