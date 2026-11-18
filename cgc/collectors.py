@@ -110,8 +110,7 @@ def kill(o, hints=False):
     if content and o.saved is None and len(stub) < len(content):
         o.saved = content
         o.msg["content"] = stub
-        # Re-split on ", " so a quoted key containing a comma refreshes as two items, as the old regex edit did.
-        o.stub_keys = ", ".join(found).split(", ") if found else []
+        o.stub_keys = found
         o.stub_tail = tail
 
 
