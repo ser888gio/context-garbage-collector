@@ -56,7 +56,7 @@ def plot(pts, out):
     fig.legend(handles + [ref, hollow], labels + ["reference (keys hints)", "hollow = keys, filled = pointer+coalesce"],
                loc="lower center", ncol=5, fontsize=8, frameon=False)
     n = pts.n
-    fig.suptitle(f"Cost vs accuracy: keys hints → pointer + coalesce ({MODEL}, {n.max()} seeds)", fontsize=11)
+    fig.suptitle(f"Cost vs accuracy: keys hints → pointer + coalesce ({MODEL})", fontsize=11)
     note = f"n per point: {n.min()}-{n.max()} runs; points with fewer than {MIN_N} runs omitted"
     if pts.api_errors.sum():
         note += f"; {int(pts.api_errors.sum())} API-error runs counted as failures"
