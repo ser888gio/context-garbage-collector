@@ -175,6 +175,7 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
 
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
         embed=None, coalesce=False, search=False, dedup=False, recall="in_place"):
+    hints = C.stub_mode(hints)
     heap, ids = [], itertools.count()
 
     def add(msg, turn, root=False, label="", call=""):
@@ -367,6 +368,17 @@ def cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup,
     return (model, strategy, trigger, C.stub_mode(hints), pressure, coalesce, search, dedup, recall, budget, task_id)
 
 
+def flag_list(p, name, raw, allowed):
+    values = raw.split(",")
+    if not set(values) <= set(allowed):
+        p.error(f"unknown --{name} value in {raw!r}; choose from {', '.join(allowed)}")
+    return values
+
+
+def bool_list(p, name, raw):
+    return [v == "true" for v in flag_list(p, name, raw, ("true", "false"))]
+
+
 def main():
     p = argparse.ArgumentParser(description="Sweep GC strategies over needle tasks. Resumable: finished cells are skipped.")
     p.add_argument("--models", default="openrouter/nvidia/nemotron-3.5-lightning:free")
@@ -393,17 +405,12 @@ def main():
     except KeyError as e:
         p.error(f"unknown --hints value {e.args[0]!r}; choose from {', '.join(k for k in C.MODES if isinstance(k, str))}")
 
-    search_modes = a.search.split(",")
-    if not set(search_modes) <= {"true", "false"}:
-        p.error(f"unknown --search value in {a.search!r}; choose from true, false")
-
-    dedup_modes = a.dedup.split(",")
-    if not set(dedup_modes) <= {"true", "false"}:
-        p.error(f"unknown --dedup value in {a.dedup!r}; choose from true, false")
-
-    recall_modes = a.recall.split(",")
-    if not set(recall_modes) <= {"in_place", "tail"}:
-        p.error(f"unknown --recall value in {a.recall!r}; choose from in_place, tail")
+    upfront_modes = bool_list(p, "upfront", a.upfront)
+    pressure_modes = bool_list(p, "pressure", a.pressure)
+    coalesce_modes = bool_list(p, "coalesce", a.coalesce)
+    search_modes = bool_list(p, "search", a.search)
+    dedup_modes = bool_list(p, "dedup", a.dedup)
+    recall_modes = flag_list(p, "recall", a.recall, ("in_place", "tail"))
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -412,13 +419,12 @@ def main():
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
-        cells = itertools.product(a.family.split(","), a.upfront.split(","), map(float, a.positions.split(",")),
+        cells = itertools.product(a.family.split(","), upfront_modes, map(float, a.positions.split(",")),
                                   map(int, a.seeds.split(",")), a.triggers.split(","), a.strategies.split(","),
-                                  hint_modes, [x == "true" for x in a.pressure.split(",")],
-                                  [x == "true" for x in a.coalesce.split(",")], [x == "true" for x in search_modes],
-                                  [x == "true" for x in dedup_modes], recall_modes)
+                                  hint_modes, pressure_modes, coalesce_modes, search_modes, dedup_modes,
+                                  recall_modes)
         for family, upfront, pos, seed, trigger, strategy, hints, pressure, coalesce, search, dedup, recall in cells:
-            task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront == "true")
+            task = BUILDERS[family](seed, a.n_files, position=pos, upfront=upfront)
             if cell_key(model, strategy, trigger, hints, pressure, coalesce, search, dedup, recall, a.budget, task["id"]) in done:
                 continue
             spent = sum(r["cost_usd"] for r in load_runs())  # re-read: parallel sweeps share runs.jsonl and the cap
