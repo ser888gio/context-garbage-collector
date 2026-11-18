@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from cgc import collectors as C
@@ -88,30 +86,8 @@ def test_a_rerun_with_the_same_recall_mode_is_skipped(run_sweep):
     assert (sweep.agent.requests - before, len(sweep.rows)) == (0, 1)
 
 
-def test_rows_from_before_the_recall_field_existed_count_as_in_place_when_resuming(run_sweep):
-    sweep = run_sweep(*ARGS)
-    runs = sweep.cwd / "results" / "runs.jsonl"
-    runs.write_text("".join(json.dumps({k: v for k, v in json.loads(line).items() if k != "recall"}) + "\n"
-                            for line in runs.read_text().splitlines()))
-    before = sweep.agent.requests
-
-    sweep.rerun()
-
-    assert (sweep.agent.requests - before, len(sweep.rows)) == (0, 1)
-
-
 def test_an_unknown_recall_value_is_rejected_by_the_cli(run_sweep):
     proc = run_sweep("--recall", "banana", check=False).proc
 
     assert proc.returncode == 2
     assert "unknown --recall value" in proc.stderr
-
-
-def test_report_load_backfills_recall_for_old_rows(run_sweep):
-    from analysis.report import load
-    sweep = run_sweep(*ARGS)
-    runs = sweep.cwd / "results" / "runs.jsonl"
-    runs.write_text("".join(json.dumps({k: v for k, v in json.loads(line).items() if k != "recall"}) + "\n"
-                            for line in runs.read_text().splitlines()))
-
-    assert list(load(runs).recall) == ["in_place"]

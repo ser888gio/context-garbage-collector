@@ -1,15 +1,8 @@
-import json
-
 import pytest
-
-from analysis.report import load
 
 COMPRESS = ("--strategies", "compress", "--hints", "keys", "--budget", "8000")
 BLOCK = ("[compressed msgs 3-21] The access code for project ORPHEUS is 9376. "
          "The access code for project ORBITAL is 5242. (earlier: The access code for project ORION is 7634.)")
-LEGACY_ROW = {"run_id": "legacy", "strategy": "mark_sweep", "trigger": "threshold:0.7", "model": "m", "task_id": "t",
-              "task_family": "needle", "success": True, "end": "answered", "turns": 3, "budget": 4000,
-              "input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 5, "cost_usd": 0.0, "gc_runs": 1}
 
 
 @pytest.fixture(scope="module")
@@ -229,12 +222,3 @@ def test_with_coalesce_the_other_stubs_are_still_grouped_into_runs(coalesced):
 
     assert grouped == [
         "[collected 6 earlier tool results", "[collected 2 earlier tool results"]
-
-
-def test_report_load_backfills_the_compress_counters_for_older_rows(tmp_path):
-    runs = tmp_path / "runs.jsonl"
-    runs.write_text(json.dumps(LEGACY_ROW) + "\n")
-
-    df = load(runs)
-
-    assert (df.compressions.isna().tolist(), df.compressed_msgs.isna().tolist()) == ([True], [True])

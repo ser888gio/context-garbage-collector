@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 REREADER = ("--models", "openai/scripted-rereader", "--triggers", "every_turn", "--dedup", "true,false")
@@ -75,19 +73,6 @@ def test_an_unknown_dedup_value_is_rejected_by_the_cli(run_sweep):
 
     assert proc.returncode == 2
     assert "unknown --dedup value" in proc.stderr
-
-
-def test_resuming_skips_cells_recorded_before_the_dedup_field_existed(run_sweep):
-    sweep = run_sweep("--strategies", "mark_sweep", "--dedup", "false")
-    runs = sweep.cwd / "results" / "runs.jsonl"
-    legacy = [{k: v for k, v in json.loads(line).items() if k not in ("dedup", "dedups")}
-              for line in runs.read_text().splitlines()]
-    runs.write_text("".join(json.dumps(r) + "\n" for r in legacy))
-    before = sweep.agent.requests
-
-    sweep.rerun()
-
-    assert (sweep.agent.requests - before, len(sweep.rows)) == (0, 1)
 
 
 def test_a_dedup_cell_is_not_skipped_because_the_same_cell_ran_without_dedup(run_sweep):

@@ -8,16 +8,6 @@ import matplotlib.pyplot as plt
 
 KEYS = ["model", "strategy", "trigger"]
 RUNS = "results/runs.jsonl"
-NAN = float("nan")
-DEFAULTS = {
-    "hints": "none", "pressure": False, "coalesce": False, "search": False, "searches": NAN, "dedup": False,
-    "recall": "in_place", "dedups": NAN, "compressions": NAN, "compressed_msgs": NAN, "tag": "", "error": "",
-    "cache_breaks": NAN, "stable_prefix_share": NAN, "max_est_tokens": NAN, "max_context_tokens": NAN,
-    "recalls": NAN, "cost_usd": 0.0,
-}
-# Old rows have NaN here; the other defaults only fill columns that are missing entirely (cost_usd NaN stays NaN).
-FILL_NULLS = ["hints", "pressure", "coalesce", "search", "dedup", "recall", "tag", "error"]
-BOOLS = ["pressure", "coalesce", "search", "dedup"]
 
 
 def cli(out):
@@ -30,14 +20,6 @@ def cli(out):
 
 def load(path):
     df = pd.read_json(path, lines=True)
-    for col, default in DEFAULTS.items():
-        if col not in df:
-            df[col] = default
-        elif col in FILL_NULLS:
-            df[col] = df[col].fillna(default)
-    df[BOOLS] = df[BOOLS].astype(bool)
-    df["error"] = df.error.astype(str)
-    df["hints"] = df.hints.replace({False: "none", True: "keys"}).astype(str)
     df["cached_share"] = df.cached_input_tokens / df.input_tokens
     df["oom"] = df.end == "oom"
     oracle = df[df.strategy == "oracle"].assign(ppt=lambda d: d.input_tokens / d.turns)

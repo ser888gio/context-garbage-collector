@@ -414,8 +414,8 @@ def main():
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    done = {cell_key(r["model"], r["strategy"], r["trigger"], r.get("hints", False), r.get("pressure", False),
-                     r.get("coalesce", False), r.get("search", False), r.get("dedup", False), r.get("recall", "in_place"), r["budget"], r["task_id"]) for r in load_runs()}
+    done = {cell_key(r["model"], r["strategy"], r["trigger"], r["hints"], r["pressure"],
+                     r["coalesce"], r["search"], r["dedup"], r["recall"], r["budget"], r["task_id"]) for r in load_runs()}
 
     for model in a.models.split(","):
         complete = litellm_complete(model)
