@@ -134,6 +134,34 @@ If you run an agent like this, here is what I would take from the experiment:
 5. **Collect automatically.** Do not rely on the model to call `forget` or `compress`.
 6. **Keep an oracle in your evals.** Without a run that knows the answer, I could not have told which failures were mine.
 
+## Use it in your own agent
+
+I pulled the collector out of the experiment into a small library, so you can try these settings without my harness. The experiment itself now runs on the same code, so the library behaves exactly like what I measured. Its defaults are the combination that held up best: mark-sweep, pointer stubs, coalescing, a search tool, and recall that returns the content at the end of the context.
+
+In a plain OpenAI-style loop, you pass your messages through it before each call and let it answer its own tools:
+
+```python
+from cgc.context import Context
+
+ctx = Context()
+resp = client.chat.completions.create(model=MODEL, messages=ctx.prepare(messages),
+                                      tools=my_tools + ctx.tools)
+# for each tool call:
+result = ctx.call(name, args) or my_dispatch(name, args)
+```
+
+In Google's Agent Development Kit it is a callback plus two tools:
+
+```python
+from cgc.adk import Collector
+
+collector = Collector(budget=32000)
+agent = Agent(..., before_model_callback=collector.before_model,
+              tools=[*my_tools, *collector.adk_tools])
+```
+
+The session keeps every full message; the collector only changes what the model sees on each call. Two caveats: the defaults come from one model's results, and the ADK adapter keeps its state in process memory, so it suits a single instance for now.
+
 ## The takeaway
 
 I went looking for a collector that would beat a sliding window. What I found is that the window was never the whole problem. Every collector throws something away, and what separates a working agent from a lost one is whether it can tell *what* was thrown away and how to get it back.
