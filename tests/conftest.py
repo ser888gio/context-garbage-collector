@@ -253,3 +253,24 @@ def run_sweep(scripted):
         return sweep
 
     return run
+
+
+def converse(ctx, task):
+    """Drive the ScriptedAgent through `ctx` the way an agent loop would. Returns (answer, history, sent)."""
+    from cgc.agent import FILE_TOOLS, SYSTEM
+
+    agent = ScriptedAgent()
+    history = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task["prompt"]}]
+    sent = []
+    while True:
+        sent.append(ctx.prepare(history))
+        message, finish = agent.reply(sent[-1], FILE_TOOLS + ctx.tools)
+        history.append(message)
+        if finish == "stop":
+            return message["content"], history, sent
+        for c in message["tool_calls"]:
+            name, args = c["function"]["name"], json.loads(c["function"]["arguments"])
+            result = ctx.call(name, args)
+            if result is None:
+                result = "\n".join(task["files"]) if name == "list_files" else task["files"][args["path"]]
+            history.append({"role": "tool", "tool_call_id": c["id"], "content": result})
