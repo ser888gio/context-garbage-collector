@@ -130,7 +130,7 @@ class ScriptedAgent:
         return self.text(answer or "I don't know")
 
     def call(self, name, args):
-        tool_call = {"id": f"call_{self.context_size}", "type": "function",
+        tool_call = {"id": f"call_{self.requests}", "type": "function",
                      "function": {"name": name, "arguments": json.dumps(args)}}
         return {"role": "assistant", "content": None, "tool_calls": [tool_call]}, "tool_calls"
 

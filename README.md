@@ -79,6 +79,37 @@ Ideas taken from other context-management work. Each gets its own branch and a h
 
 The DCP plugin is AGPL-3.0; only its ideas are reimplemented here, no code is copied.
 
+## Use it in your own agent
+
+`cgc.context.Context` takes an OpenAI-format message list and returns the one to send, with old messages collected into stubs. Recall and search are tools the model can call. The defaults (`cgc.context.DEFAULTS`) are provisional and will be updated from the sweep results.
+
+```python
+from cgc.context import Context
+
+ctx = Context(budget=16000)                      # strategy, trigger, hints, coalesce, search, dedup, recall
+messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task}]
+while True:
+    reply = my_model(ctx.prepare(messages), tools=[*my_tools, *ctx.tools])
+    messages.append(reply)                       # the history stays append-only; prepare never edits it
+    if not reply.get("tool_calls"):
+        break
+    for c in reply["tool_calls"]:
+        args = json.loads(c["function"]["arguments"])
+        result = ctx.call(c["function"]["name"], args) or my_dispatch(c["function"]["name"], args)
+        messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+```
+
+Google ADK (`pip install -e .[adk]`), one collector per process, state kept per session id:
+
+```python
+from cgc.adk import Collector
+
+collector = Collector(budget=16000)              # same options as Context
+agent = Agent(name="a", model=model, instruction=SYSTEM,
+              before_model_callback=collector.before_model,
+              tools=[*my_tools, *collector.adk_tools])
+```
+
 ## How it works
 
 One run: the agent reads a folder of note files while a collector keeps its context under a token budget, then answers a question.
