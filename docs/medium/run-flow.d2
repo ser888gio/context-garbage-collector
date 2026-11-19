@@ -1,0 +1,25 @@
+classes: {
+  stop: {style: {fill: "#fef3c7"; stroke: "#d97706"}}
+}
+
+grid-rows: 2
+grid-columns: 4
+horizontal-gap: 80
+vertical-gap: 90
+
+task: "Task\nread 30 note files,\nthen answer a question"
+ctx: "Context\nmessages as heap objects" {shape: cylinder}
+gc: "Collector\nover 70% of budget:\ndead messages → stubs"
+oom: "Run ends:\nout of memory" {class: stop}
+blank: "" {style: {opacity: 0}}
+tools: "Tool results\nread_file adds a message;\nrecall / search bring\noriginals back"
+llm: "Model call"
+answer: "Run ends:\ncheck the answer" {class: stop}
+
+task -> ctx
+ctx -> gc
+gc -> oom: still over\nbudget
+gc -> llm
+llm -> tools
+tools -> ctx: next turn
+llm -> answer: text\nanswer

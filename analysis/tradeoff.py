@@ -14,7 +14,7 @@ MODEL = "gpt-oss-120b"
 
 def points(path):
     df = load(path)
-    df = df[df.model.str.contains(MODEL) & (df.trigger == "threshold:0.7") & ~df.pressure
+    df = df[df.model.str.contains(MODEL) & (df.trigger == "threshold:0.7") & ~df.pressure & ~df.search & ~df.dedup & (df.recall == "in_place")
             & df.strategy.isin(list(MOVERS) + REFS)]
     df = df.assign(api_errors=df.error.ne(""))
     keys = (df.hints == "keys") & ~df.coalesce
@@ -35,7 +35,7 @@ def plot(pts, out):
         for _, r in p[p.strategy.isin(REFS)].iterrows():
             ax.scatter(r.tokens / 1000, r.success, c="#888888", marker="D", s=40, zorder=2)
             ax.annotate(r.strategy, (r.tokens / 1000, r.success), fontsize=8, color="#555555",
-                        xytext=(6, 6), textcoords="offset points")
+                        xytext=(6, -12 if r.strategy == "lru_mask" else 6), textcoords="offset points")
         for s, color in MOVERS.items():
             a = p[(p.strategy == s) & (p.variant == "keys")]
             b = p[(p.strategy == s) & (p.variant == "pointer+coalesce")]
@@ -57,7 +57,7 @@ def plot(pts, out):
                loc="lower center", ncol=5, fontsize=8, frameon=False)
     n = pts.n
     fig.suptitle(f"Cost vs accuracy: keys hints → pointer + coalesce ({MODEL})", fontsize=11)
-    note = f"n per point: {n.min()}-{n.max()} runs; points with fewer than {MIN_N} runs omitted"
+    note = f"n per point: {n.min()}{f'-{n.max()}' if n.max() > n.min() else ''} runs; points with fewer than {MIN_N} runs omitted"
     if pts.api_errors.sum():
         note += f"; {int(pts.api_errors.sum())} API-error runs counted as failures"
     fig.text(0.5, 0.905, note, ha="center", fontsize=8, color="#555555")
