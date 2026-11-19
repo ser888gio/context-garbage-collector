@@ -45,7 +45,11 @@ def adk_run(scripted):
                       model=LiteLlm(model="openai/scripted-agent", api_base=env["OPENAI_BASE_URL"], api_key="e2e"),
                       before_model_callback=collector.before_model, tools=[list_files, read_file, *collector.adk_tools])
     start = len(agent.seen)
-    answer, session_id = asyncio.run(run_agent(adk_agent, task["prompt"]))
+    agent.unique_ids = True
+    try:
+        answer, session_id = asyncio.run(run_agent(adk_agent, task["prompt"]))
+    finally:
+        agent.unique_ids = False
     return answer, collector.context(session_id), agent.seen[start:]
 
 

@@ -37,6 +37,8 @@ class ScriptedAgent:
     def __init__(self):
         self.requests, self.notes, self.context_size, self.offered, self.noted = 0, [], 0, [], []
         self.seen = []
+        # ADK pairs calls with responses by id, so it needs ids that never repeat.
+        self.unique_ids = False
 
     def reply(self, messages, tools, model=""):
         self.requests += 1
@@ -130,7 +132,7 @@ class ScriptedAgent:
         return self.text(answer or "I don't know")
 
     def call(self, name, args):
-        tool_call = {"id": f"call_{self.requests}", "type": "function",
+        tool_call = {"id": f"call_{self.requests if self.unique_ids else self.context_size}", "type": "function",
                      "function": {"name": name, "arguments": json.dumps(args)}}
         return {"role": "assistant", "content": None, "tool_calls": [tool_call]}, "tool_calls"
 
