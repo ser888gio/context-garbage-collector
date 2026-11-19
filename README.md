@@ -14,7 +14,8 @@ All numbers below are from one model, `groq/openai/gpt-oss-120b`, with the quest
 - **Cheap collectors lose on harder tasks.** On multihop (the answer needs two files) and poison (a fact is corrected later), the collectors that keep more context succeed more and cost more: truncate is the expensive, safe end, mark_sweep the cheap, lossy end ([chart](docs/img/tradeoff.png)).
 - **Following references did not help.** Mark-sweep did worse than plain LRU masking on multihop (6/10 vs 9/10), and the write barrier did not fix poisoning (3/10).
 - **Stale numbers leak through stubs.** Poison failures answered the revoked code because the stub advertised it. Stubs that point at the superseding message, with collected results rendered as one message (`pointer` + coalesce), took mark_sweep and refcount on poison from 2/10 to 10/10.
-- **The model is a bad collector of its own memory.** With a `forget` tool and nothing automatic, it forgot too little and ran out of memory (1/3).
+- **The model is a bad collector of its own memory.** With a `forget` tool and nothing automatic it got 4/30; with a DCP-style `compress` tool, 2/30. Both forgot too little and ran out of memory.
+- **Search beats hints for recovery.** A search tool over collected text took bare-stub mark_sweep from 0/10 to 7/10 on needle, and hybrid from 4/10 to 9/10 on poison.
 - **Paraphrase is unsolved.** When the question names a description instead of the project, every real collector is at 3-5/10; only the oracle succeeds.
 
 Other models: `gpt-oss-20b` and Qwen 3.8 27B on Groq failed at tool calling in this harness, and the free Gemini and OpenRouter quotas were too small for sweeps, so every result above rests on one model.
@@ -37,8 +38,8 @@ A strategy decides which messages to stub when the context passes the threshold.
 | `generational` | Mark-sweep the young messages each time; survivors are promoted and only swept when memory is tight. | Generational GC (classic GC) | 2/3 | — | — | — |
 | `h2o` | Keep the first 2 messages, the newest 2 turns and the 4 most-referenced tool results; stub the rest. | [H2O heavy-hitter KV eviction](https://arxiv.org/abs/2306.14048) | 3/3 | — | — | — |
 | `semantic` | Keep the 4 messages whose embeddings are closest to the roots; stub the rest. Needs `GEMINI_API_KEY`. | Query-aware selection ([SnapKV](https://arxiv.org/abs/2404.14469), [Quest](https://arxiv.org/abs/2406.10774)) | 10/10 | — | — | 4/10 |
-| `manual` | Collect nothing; the model gets a `forget(ids)` tool and a memory-pressure note. | Self-managed memory, [MemGPT](https://arxiv.org/abs/2310.08560) | 1/3 | — | — | — |
-| `compress` | Collect nothing; the model gets a `compress(from_id, to_id, summary)` tool that replaces a range of old messages with its own summary (originals stay recallable), and a memory note above 50% of the budget, every 5th call. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) (compress tool) | — | — | — | — |
+| `manual` | Collect nothing; the model gets a `forget(ids)` tool and a memory-pressure note. | Self-managed memory, [MemGPT](https://arxiv.org/abs/2310.08560) | 1/10 | 2/10 | 1/10 | — |
+| `compress` | Collect nothing; the model gets a `compress(from_id, to_id, summary)` tool that replaces a range of old messages with its own summary (originals stay recallable), and a memory note above 50% of the budget, every 5th call. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) (compress tool) | 1/10 | 0/10 | 1/10 | — |
 | `oracle` | Knows the answer; stubs everything that does not contain it. Upper bound. | This project | 10/10 | 10/10 | 10/10 | 10/10 |
 
 Strategies that are not baselines (`refcount`, `mark_sweep`, `mark_sweep_chain`, `write_barrier`, `generational`, `semantic`) also stub the oldest reachable tool results when the trigger sets a lower target (see `threshold:P:T` below).
@@ -60,8 +61,8 @@ These change what a stub carries, how the context is shown to the model, or when
 | `--triggers threshold:P:T` | Collect when over P of the budget, then down to T (hysteresis). | Low-water marks in GC; [Don't Break the Cache](https://arxiv.org/abs/2601.06007) | No visible effect on cache breaks (n=3). |
 | `--triggers every_turn` | Collect before every model call. | — | Not run on a real model. |
 | `--positions` | Where the needle file sits in the reading order. | [Lost in the Middle](https://arxiv.org/abs/2307.03172) | Only 0.5 run so far. |
-| `--dedup true` | Stub the older result when a later live `list_files` or `read_file` result came from the same call. | OpenCode DCP plugin (deduplication) | Not run on a real model. |
-| `--recall tail` | Return a recalled message as the `recall` result at the end of the context (`[recalled msg N] ...`) and leave the stub where it is. | RAMPART (block placement) | Not run on a real model. |
+| `--dedup true` | Stub the older result when a later live `list_files` or `read_file` result came from the same call. | OpenCode DCP plugin (deduplication) | Never fired (n=10 per cell). |
+| `--recall tail` | Return a recalled message as the `recall` result at the end of the context (`[recalled msg N] ...`) and leave the stub where it is. | RAMPART (block placement) | Same success as in place (needle 9-10/10, poison 2-3/10); too few recalls to judge. |
 | `--upfront true` | Ask the question with the task instead of at the end. | — | Not run on a real model. |
 
 ## From other projects
@@ -70,11 +71,11 @@ Ideas taken from other context-management work. Each gets its own branch and a h
 
 | Feature | What it would do | Idea from | Status |
 |---|---|---|---|
-| `search` tool (`--search true`) | Search the text of collected messages and return up to 5 matching sentences (`msg N: ...`), instead of restoring a whole message with `recall`. Live messages are not searched. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | Built, not yet run (H25-H27) |
-| Searchable summaries | Keep the original of the message `hybrid` overwrites with its summary (`archived` in the trace), so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | Built, not yet run (H28). Rarely matters here: the overwritten message is usually an assistant tool call with no text, and the summarized tool results were already searchable. |
-| Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Built, not yet run (H29). |
-| `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | Built, not yet run (H30) |
-| Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | Built, not yet run (H31) |
+| `search` tool (`--search true`) | Search the text of collected messages and return up to 5 matching sentences (`msg N: ...`), instead of restoring a whole message with `recall`. Live messages are not searched. | Cursor, "Dynamic context discovery" (long tool output written to files the agent reads in part) | Recovers the needle without stub hints: needle 0/10 → 7/10 with `--hints none`, ~35% fewer tokens; every run that searched succeeded (H25). Poison 2/10 → 6/10, but most successes never searched (H27 unclear). |
+| Searchable summaries | Keep the original of the message `hybrid` overwrites with its summary (`archived` in the trace), so search can still reach it. | Cursor, same post (chat history kept as a file after summarization) | `hybrid` + search: multihop 7/10 → 9/10, poison 4/10 → 9/10 at the same token cost (H28). The archived originals themselves rarely matter: the overwritten message is usually an assistant tool call with no text, and the summarized tool results were already searchable. |
+| Deduplication | When the same tool is called again with the same arguments, stub the older result. Runs only inside a collection, so it adds no cache breaks. | [OpenCode DCP plugin](https://github.com/Tarquinen/opencode-dynamic-context-pruning) | Never fired: the model did not repeat a call in 40 runs, so H29 is untested on these tasks. |
+| `compress` tool | The model picks a range of messages and writes its own summary for them; overlapping summaries nest; a reminder fires every Nth call above a threshold. | OpenCode DCP plugin | As the only collector it fails: 2/30, 28 out of memory; the model compressed too rarely (H30). Not tested alongside automatic collection, as DCP uses it. |
+| Recall to the tail | Return recalled content as the `recall` tool result at the end of the context instead of restoring it in place: closer to the question, and the earlier prompt stays cacheable. | RAMPART (placement of blocks matters); Lost in the Middle | No effect: the model recalled in 1-4 of 10 runs, too rarely for placement to matter (H31 unclear). |
 | `--hints summary` | Stub carries a one-line, model-written summary of the collected message. | Dynamic Context Loading (Moncef Abboud): model-written tool briefs | Idea |
 
 The DCP plugin is AGPL-3.0; only its ideas are reimplemented here, no code is copied.
