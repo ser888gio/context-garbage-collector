@@ -1,5 +1,4 @@
 import argparse
-import copy
 import itertools
 import json
 import re
@@ -8,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from cgc import collectors as C
+from cgc.context import Context
 from cgc.tasks import BUILDERS
 
 EMBED_MODEL = "gemini/gemini-embedding-001"
@@ -18,20 +18,13 @@ SYSTEM = ("You are a careful agent working with tools. To save space, older mess
           "'[collected: msg N ...]' stubs. If you need what a stub held, call recall with its id.")
 SUMMARY_SYSTEM = ("Summarize the conversation excerpt below for an agent that will continue the task. "
                   "Keep every name, number and file path; drop everything else.")
-TOOLS = [
+FILE_TOOLS = [
     {"type": "function", "function": {"name": "list_files", "description": "List all note files.",
                                       "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read one note file.",
                                       "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
                                                      "required": ["path"]}}},
-    {"type": "function", "function": {"name": "recall", "description": "Restore a collected message by its id.",
-                                      "parameters": {"type": "object", "properties": {"id": {"type": "integer"}},
-                                                     "required": ["id"]}}},
 ]
-SEARCH_TOOL = {"type": "function", "function": {
-    "name": "search", "description": "Search the text of collected messages without restoring them. "
-                                     "Returns matching sentences with their message ids.",
-    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 SEARCH_SENTENCE = " You can call search(query) to find text in collected messages without restoring them."
 FORGET_TOOL = {"type": "function", "function": {
     "name": "forget", "description": "Free memory: collect old messages by id (tool results show [msg N]). "
@@ -67,24 +60,14 @@ def cost_of(resp):
         return 0.0
 
 
-TAIL_RECALL_TOOL = {"type": "function", "function": {
-    "name": "recall", "description": "Return a collected message's content as this call's result; the stub stays in place.",
-    "parameters": TOOLS[2]["function"]["parameters"]}}
+NUDGE_FROM, NUDGE_EVERY = 0.5, 5
 
 
-def call_tool(name, args, task, heap, turn, recall="in_place"):
+def call_tool(name, args, task):
     if name == "list_files":
         return "\n".join(task["files"])
     if name == "read_file":
         return task["files"].get(args.get("path", ""), f"error: no file {args.get('path')!r}")
-    if name == "recall" and recall == "tail":
-        obj_id = int(args.get("id", -1))
-        o = next((o for o in heap if o.id == obj_id), None)
-        return f"[recalled msg {obj_id}] {o.saved}" if o and o.saved is not None else "error: nothing to restore"
-    if name == "recall":
-        return "restored" if C.restore(heap, int(args.get("id", -1)), turn) else "error: nothing to restore"
-    if name == "search":
-        return C.search(heap, str(args.get("query", "")))
     return f"error: unknown tool {name}"
 
 
@@ -104,28 +87,22 @@ def pressure_note(heap, budget):
                                        f"{sum(o.dead for o in heap)} messages collected."}
 
 
-def parse_trigger(trigger):
-    parts = trigger.split(":")
-    threshold = float(parts[1]) if len(parts) > 1 else 0.7
-    target = float(parts[2]) if len(parts) == 3 else None
-    return threshold, target
-
-
 def add_usage(s, resp):
     s["input_tokens"] += resp.usage.prompt_tokens
     s["output_tokens"] += resp.usage.completion_tokens
     s["cost_usd"] += cost_of(resp)
 
 
-def build_tools(recall, manual, compress, search):
-    return (TOOLS[:2] + [TAIL_RECALL_TOOL] if recall == "tail" else TOOLS) + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + [SEARCH_TOOL] * search
+def build_tools(ctx, manual, compress):
+    recall, *search = ctx.tools
+    return FILE_TOOLS + [recall] + [FORGET_TOOL] * manual + [COMPRESS_TOOL] * compress + search
 
 
-def memory_notes(heap, budget, st, model_calls, nudge, pressure, manual, compress):
+def memory_notes(heap, budget, nudge, model_calls, pressure, manual, compress):
     send = pressure or manual
-    if compress and not send and C.size(heap) > budget * st["nudge_from"]:
+    if compress and not send and C.size(heap) > budget * NUDGE_FROM:
         nudge.setdefault("first", model_calls)
-        send = (model_calls - nudge["first"]) % st["nudge_every"] == 0
+        send = (model_calls - nudge["first"]) % NUDGE_EVERY == 0
     return [pressure_note(heap, budget)] if send else []
 
 
@@ -176,19 +153,6 @@ def build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, e
 def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=False, pressure=False, tag="",
         embed=None, coalesce=False, search=False, dedup=False, recall="in_place"):
     hints = C.stub_mode(hints)
-    heap, ids = [], itertools.count()
-
-    def add(msg, turn, root=False, label="", call=""):
-        heap.append(C.Obj(next(ids), msg, turn, root=root, label=label, call=call, touched=turn, last_used=turn))
-        return heap[-1]
-
-    add({"role": "system", "content": SYSTEM + SEARCH_SENTENCE * search}, 0, root=True)
-    add({"role": "user", "content": task["prompt"]}, 0, root=True)
-    threshold, target = parse_trigger(trigger)
-    st = {"budget": budget, "hints": hints, "threshold": threshold, "dedup": dedup, "nudge_from": 0.5,
-          "nudge_every": 5}
-    if target is not None:
-        st["target"] = target
     s = dict(input_tokens=0, cached_input_tokens=0, output_tokens=0, cost_usd=0.0, gc_runs=0, tokens_freed=0,
              recalls=0, searches=0, forgets=0, dedups=0, compressions=0, compressed_msgs=0, embed_calls=0, summary_calls=0, repeated_calls=0, unknown_tool_calls=0,
              max_context_tokens=0, max_est_tokens=0)
@@ -200,25 +164,26 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         add_usage(s, resp)
         return resp.choices[0].message.content or ""
 
-    st["summarize"] = summarize
-
+    counted = None
     if strategy == "semantic":
         raw = embed or litellm_embed(EMBED_MODEL)
 
         def counted(texts):
             s["embed_calls"] += 1
             return raw(texts)
-        st["embed"] = counted
-    if strategy == "oracle":
-        st["oracle_keys"] = {task["answer"]}
+    ctx = Context(strategy, trigger, budget, hints, coalesce, search, dedup, recall, embed=counted,
+                  summarize=summarize, oracle_keys={task["answer"]} if strategy == "oracle" else None)
+    hist = [{"role": "system", "content": SYSTEM + SEARCH_SENTENCE * search}, {"role": "user", "content": task["prompt"]}]
+    pinned = set()
     prev, shares, cache_breaks = [], [], 0
-    events, seen_calls, asked, answer, end, t0 = [], set(), task["upfront"], "", "max_turns", time.time()
+    seen_calls, asked, answer, end, t0 = set(), task["upfront"], "", "max_turns", time.time()
     error = ""
     manual = strategy == "manual"
     compress = strategy == "compress"
-    tools = build_tools(recall, manual, compress, search)
+    tools = build_tools(ctx, manual, compress)
     nudge, model_calls = {}, 0
     known = {t["function"]["name"] for t in tools}
+    ours = {t["function"]["name"] for t in ctx.tools}
 
     def handle_call(c, turn):
         try:
@@ -228,55 +193,45 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         sig = c.function.name + json.dumps(args, sort_keys=True)
         if c.function.name not in known:
             s["unknown_tool_calls"] += 1
-        if c.function.name == "recall":
-            s["recalls"] += 1
-        elif c.function.name == "search" and search:
-            s["searches"] += 1
-        elif sig in seen_calls:
+        if c.function.name not in ours and sig in seen_calls:
             s["repeated_calls"] += 1
         seen_calls.add(sig)
         if manual and c.function.name == "forget":
-            done, refused = C.forget(heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
+            done, refused = C.forget(ctx.heap, [i for i in args.get("ids", []) if isinstance(i, int)], hints)
             s["forgets"] += len(done)
             result = f"forgot {done}; refused (root, newest turn, unknown or already collected) {refused}"
         elif compress and c.function.name == "compress":
-            done, refused = C.compress(heap, args.get("from_id"), args.get("to_id"), args.get("summary"), hints)
+            done, refused = C.compress(ctx.heap, args.get("from_id"), args.get("to_id"), args.get("summary"), hints)
             s["compressions"] += bool(done)
             s["compressed_msgs"] += len(done)
             result = f"compressed {done} into msg {done[0]}" if done else f"refused: {refused}"
         else:
-            result = call_tool(c.function.name, args, task, heap, turn, recall)
-        label = f"{c.function.name} {args.get('path', '')}".strip()
-        o = add({"role": "tool", "tool_call_id": c.id, "content": result}, turn, label=label, call=sig)
-        if manual or compress:
-            o.msg["content"] = f"[msg {o.id}] {result}"
+            result = ctx.call(c.function.name, args)
+            if result is None:
+                result = call_tool(c.function.name, args, task)
+        # Heap ids are history indices, so the id the model sees can be written before the message exists.
+        hist.append({"role": "tool", "tool_call_id": c.id,
+                     "content": f"[msg {len(hist)}] {result}" if manual or compress else result})
 
     turn = 0
     for turn in range(1, max_turns + 1):
-        before = C.size(heap)
-        if trigger == "every_turn" or before > budget * threshold:
-            freed, error = guarded(C.collect, strategy, heap, st)
-            if error:
-                end = "api_error"
-                break
-            s["gc_runs"] += 1
-            s["dedups"] = st.get("dedups", 0)
-            s["tokens_freed"] += before - C.size(heap)
-            events.append({"turn": turn, "before": before, "after": C.size(heap), "collected": freed})
-        s["max_est_tokens"] = max(s["max_est_tokens"], C.size(heap))
-        if C.size(heap) > budget:
+        msgs, error = guarded(ctx.prepare, hist, pinned)
+        if error:
+            end = "api_error"
+            break
+        s["max_est_tokens"] = max(s["max_est_tokens"], C.size(ctx.heap))
+        if C.size(ctx.heap) > budget:
             end = "oom"
             break
 
-        msgs = C.render(heap, coalesce)
         n, chars = common_prefix(prev, msgs)
         shares.append(chars / sum(len(json.dumps(m)) for m in msgs))
         cache_breaks += n < len(prev)
-        prev = copy.deepcopy(msgs)  # collectors mutate messages in place
+        prev = msgs
         # The note is appended after the prefix accounting above and never stored in the heap,
         # so it can't break the cached prefix or show up in later turns.
         model_calls += 1
-        note = memory_notes(heap, budget, st, model_calls, nudge, pressure, manual, compress)
+        note = memory_notes(ctx.heap, budget, nudge, model_calls, pressure, manual, compress)
         resp, error = guarded(complete, msgs + note, tools)
         if error:
             end = "api_error"
@@ -285,11 +240,13 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
 
         m = resp.choices[0].message
         calls = m.tool_calls or []
-        add(assistant_message(m), turn)
+        hist.append(assistant_message(m))
+        ctx.sync(hist, pinned)
 
         if not calls:
             if not asked:
-                add({"role": "user", "content": task["question"]}, turn, root=True)
+                pinned.add(len(hist))
+                hist.append({"role": "user", "content": task["question"]})
                 asked = True
                 continue
             answer, end = m.content or "", "answered"
@@ -298,9 +255,10 @@ def run(task, model, strategy, trigger, budget, complete, max_turns=80, hints=Fa
         for c in calls:
             handle_call(c, turn)
 
+    s.update(ctx.stats)
     cfg = dict(strategy=strategy, trigger=trigger, hints=hints, pressure=pressure, coalesce=coalesce, search=search, dedup=dedup, recall=recall, tag=tag,
                budget=budget)
-    return build_result(task, model, cfg, heap, events, s, shares, cache_breaks, end, error, answer, turn, t0)
+    return build_result(task, model, cfg, ctx.heap, ctx.events, s, shares, cache_breaks, end, error, answer, turn, t0)
 
 
 def with_retry(call, label, sleep=time.sleep):

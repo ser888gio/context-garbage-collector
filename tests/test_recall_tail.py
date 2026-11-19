@@ -1,7 +1,9 @@
 import pytest
 
-from cgc import collectors as C
-from cgc.agent import call_tool
+from conftest import converse
+
+from cgc.context import Context
+from cgc.tasks import needle_task
 
 ARGS = ("--strategies", "mask", "--hints", "keys", "--triggers", "every_turn")
 
@@ -47,26 +49,34 @@ def test_tail_recall_keeps_a_longer_stable_prefix_than_restoring_in_place(both):
     assert both.row(recall="tail")["stable_prefix_share"] > both.row(recall="in_place")["stable_prefix_share"]
 
 
-@pytest.fixture
-def heap():
-    stub = C.Obj(5, {"role": "tool", "content": "[collected: msg 5]"}, 1, saved="the original", dead=True)
-    live = C.Obj(6, {"role": "tool", "content": "still here"}, 1)
-    return [stub, live]
+def conversation(recall):
+    ctx = Context(strategy="mask", trigger="every_turn", budget=4000, hints="keys", recall=recall)
+    _, history, _ = converse(ctx, needle_task(0, 10, upfront=True))
+    return ctx, history
 
 
-@pytest.mark.parametrize("obj_id", [99, 6, -1])
-def test_tail_recall_of_an_unknown_or_live_id_is_the_same_error_as_in_place(heap, obj_id):
-    tail = call_tool("recall", {"id": obj_id}, {}, heap, 3, "tail")
-    in_place = call_tool("recall", {"id": obj_id}, {}, heap, 3, "in_place")
+@pytest.mark.parametrize("obj_id", [99, 1, -1])
+def test_recall_of_an_unknown_or_live_id_is_the_same_error_in_both_modes(obj_id):
+    results = [conversation(mode)[0].call("recall", {"id": obj_id}) for mode in ("tail", "in_place")]
 
-    assert (tail, in_place) == ("error: nothing to restore", "error: nothing to restore")
+    assert results == ["error: nothing to restore", "error: nothing to restore"]
 
 
-def test_tail_recall_does_not_touch_the_original(heap):
-    result = call_tool("recall", {"id": 5}, {}, heap, 9, "tail")
+def test_tail_recall_does_not_touch_the_stub():
+    ctx, history = conversation("tail")
 
-    assert (result, heap[0].dead, heap[0].saved, heap[0].touched, heap[0].last_used) == (
-        "[recalled msg 5] the original", True, "the original", 0, 0)
+    ctx.call("recall", {"id": 15})
+
+    assert ctx.prepare(history)[15]["content"].startswith("[collected: msg 15 read_file notes/05.txt")
+
+
+def test_in_place_recall_puts_the_original_back_where_it_was():
+    ctx, history = conversation("in_place")
+
+    result = ctx.call("recall", {"id": 5})
+    history.append({"role": "user", "content": "go on"})
+
+    assert (result, ctx.prepare(history)[5]["content"]) == ("restored", history[5]["content"])
 
 
 def test_a_rerun_with_the_other_recall_mode_is_not_skipped(run_sweep):

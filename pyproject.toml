@@ -6,6 +6,7 @@ dependencies = ["litellm", "python-dotenv", "pandas", "matplotlib", "tabulate"]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-xdist", "hypothesis"]
+adk = ["google-adk"]
 
 [tool.setuptools]
 packages = ["cgc", "analysis"]

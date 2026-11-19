@@ -37,6 +37,8 @@ class ScriptedAgent:
     def __init__(self):
         self.requests, self.notes, self.context_size, self.offered, self.noted = 0, [], 0, [], []
         self.seen = []
+        # ADK pairs calls with responses by id, so it needs ids that never repeat.
+        self.unique_ids = False
 
     def reply(self, messages, tools, model=""):
         self.requests += 1
@@ -130,7 +132,7 @@ class ScriptedAgent:
         return self.text(answer or "I don't know")
 
     def call(self, name, args):
-        tool_call = {"id": f"call_{self.context_size}", "type": "function",
+        tool_call = {"id": f"call_{self.requests if self.unique_ids else self.context_size}", "type": "function",
                      "function": {"name": name, "arguments": json.dumps(args)}}
         return {"role": "assistant", "content": None, "tool_calls": [tool_call]}, "tool_calls"
 
@@ -253,3 +255,24 @@ def run_sweep(scripted):
         return sweep
 
     return run
+
+
+def converse(ctx, task):
+    """Drive the ScriptedAgent through `ctx` the way an agent loop would. Returns (answer, history, sent)."""
+    from cgc.agent import FILE_TOOLS, SYSTEM
+
+    agent = ScriptedAgent()
+    history = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task["prompt"]}]
+    sent = []
+    while True:
+        sent.append(ctx.prepare(history))
+        message, finish = agent.reply(sent[-1], FILE_TOOLS + ctx.tools)
+        history.append(message)
+        if finish == "stop":
+            return message["content"], history, sent
+        for c in message["tool_calls"]:
+            name, args = c["function"]["name"], json.loads(c["function"]["arguments"])
+            result = ctx.call(name, args)
+            if result is None:
+                result = "\n".join(task["files"]) if name == "list_files" else task["files"][args["path"]]
+            history.append({"role": "tool", "tool_call_id": c["id"], "content": result})
